@@ -1,0 +1,24 @@
+{
+ "pl1_w": 100.0,
+ "pl2_w": 125.0,
+ "pl1_uw": 100000000,
+ "pl2_uw": 125000000,
+ "pl1_window_us": 27983872,
+ "pl2_window_us": 2440,
+ "enabled": 1,
+ "msr": {
+  "raw": "0x4283e800dd8320",
+  "pl1_w": 100.0,
+  "pl1_enable": true,
+  "pl1_clamp": true,
+  "pl1_window_s": 28.0,
+  "pl2_w": 125.0,
+  "pl2_enable": true,
+  "pl2_clamp": false,
+  "pl2_window_s": 0.00244140625,
+  "lock": false
+ },
+ "boot_id": null,
+ "captured_at": "2026-10-09T20:31:37Z",
+ "source": "Phase 0 baseline captured before any TurboMac write (linux/receipts/phase0-20261009/baseline.json)"
+}

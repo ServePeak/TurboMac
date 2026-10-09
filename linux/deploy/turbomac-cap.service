@@ -1,0 +1,14 @@
+[Unit]
+Description=TurboMac static power cap (PL1/PL2 and GPU mode before any workload)
+Documentation=file:///opt/turbomac/src/README.md
+After=systemd-modules-load.service sys-kernel-debug.mount
+Before=docker.service systemd-user-sessions.service turbomacd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/turbomac/bin/turbomac-cap.sh apply
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

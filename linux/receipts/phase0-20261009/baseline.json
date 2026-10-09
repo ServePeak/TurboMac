@@ -1,0 +1,36 @@
+{
+  "captured_at": "2026-10-09T20:31:37Z",
+  "rapl": {
+    "enabled": "1",
+    "constraint_0_name": "long_term",
+    "constraint_0_power_limit_uw": "100000000",
+    "constraint_0_time_window_us": "27983872",
+    "constraint_0_max_power_uw": "45000000",
+    "constraint_1_name": "short_term",
+    "constraint_1_power_limit_uw": "125000000",
+    "constraint_1_time_window_us": "2440"
+  },
+  "msr_0x606": "0xa0e03",
+  "msr_0x610": "0x4283e800dd8320",
+  "msr_0x1b1": "0x881c0808",
+  "gpu": {
+    "device": "/sys/class/drm/card2/device",
+    "hwmon": "/sys/class/drm/card2/device/hwmon/hwmon4",
+    "power1_cap": "35000000",
+    "power1_cap_min": "0",
+    "power1_cap_max": "35000000",
+    "dpm_level": "auto",
+    "runtime_status": "active",
+    "switcheroo": "0:IGD: :Pwr:0000:00:02.0\n1:DIS-Audio: :DynOff:0000:01:00.1\n2:DIS:+:Pwr:0000:01:00.0"
+  },
+  "thermald": {
+    "active": "active",
+    "enabled": "enabled"
+  },
+  "intel_pstate": {
+    "no_turbo": "0",
+    "max_perf_pct": "100",
+    "min_perf_pct": "20",
+    "status": "active"
+  }
+}

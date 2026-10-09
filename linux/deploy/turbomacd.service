@@ -1,0 +1,29 @@
+[Unit]
+Description=TurboMac power governor and telemetry daemon
+Documentation=file:///opt/turbomac/src/README.md
+Requires=turbomac-cap.service
+After=turbomac-cap.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+Environment=PYTHONPATH=/opt/turbomac/src PYTHONUNBUFFERED=1
+# The static cap is (re)applied by shell before Python starts and after it exits:
+# a crash can only ever leave the static cap in place, never the firmware 100 W.
+ExecStartPre=/opt/turbomac/bin/turbomac-cap.sh apply
+ExecStart=/usr/bin/python3 -m turbomac.daemon
+ExecStop=/usr/bin/python3 -m turbomac.cap mark-clean
+ExecStopPost=/opt/turbomac/bin/turbomac-cap.sh apply
+Restart=always
+RestartSec=2
+WatchdogSec=10
+TimeoutStartSec=60
+TimeoutStopSec=20
+RuntimeDirectory=turbomac
+RuntimeDirectoryMode=0755
+StateDirectory=turbomac
+ConfigurationDirectory=turbomac
+
+[Install]
+WantedBy=multi-user.target
