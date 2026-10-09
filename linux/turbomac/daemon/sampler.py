@@ -9,12 +9,14 @@ from collections import deque
 from typing import Any
 
 from turbomac.daemon import governor
-from turbomac.daemon.smc import read_fans, read_temps
+from turbomac.daemon.smc import SMC_SLOW_EVERY_S, due, read_fans, read_temps
 
 FAST_HZ = 4
 SLOW_EVERY = 4
 HISTORY_LEN = 600
 EXTRA_SMC_KEYS = ("PSTR", "PCPC", "PCPG", "PCPT", "PG0R", "PHPC")
+FAST_SMC_KEYS = ("PDTR",)                    # every fast tick (4 Hz)
+FULL_SMC_KEYS = ("PDTR", "VD0R", "ID0R", "ACPW")   # on the slow tick (1 Hz)
 HISTORY_FIELDS = ("ts", "input_w", "pkg_w", "gpu_w", "pkg_c", "pl1_w", "state")
 
 
@@ -58,8 +60,12 @@ def _r(v: Any, nd: int = 2) -> Any:
 
 class Sampler:
     def __init__(self, smc: Any = None, rapl: Any = None, msr: Any = None, gpu: Any = None,
-                 cpu: Any = None, smc_dir: str | None = None) -> None:
+                 cpu: Any = None, smc_dir: str | None = None, smc_slow_every_s: float = SMC_SLOW_EVERY_S) -> None:
         self.smc, self.rapl, self.msr, self.gpu, self.cpu, self.smc_dir = smc, rapl, msr, gpu, cpu, smc_dir
+        self.smc_slow_every_s = smc_slow_every_s
+        self.held: dict[str, Any] = {"v": None, "a": None, "acpw_w": None}   # the last 1 Hz VD0R/ID0R/ACPW
+        self._smc_slow: dict[str, Any] = {"smc": {}, "smc_temps": {}}    # extra rails + applesmc temps
+        self._smc_slow_t: float | None = None
         self.extra = [k for k in EXTRA_SMC_KEYS if smc is not None and smc.has(k)]
         self.w = {k: Window(12.0) for k in ("input", "pkg", "core", "uncore", "dram", "acpw", "v", "a")}
         self.latest: dict[str, Any] = {}
@@ -76,48 +82,62 @@ class Sampler:
     def reset_peaks(self) -> None:
         self.peaks = {}
 
-    def fast(self, now: float, wall: float | None = None) -> dict[str, Any]:
-        """RAPL energy deltas for 4 zones + SMC PDTR/VD0R/ID0R/ACPW."""
+    def fast(self, now: float, wall: float | None = None, full: bool = True) -> dict[str, Any]:
+        """RAPL energy deltas for 4 zones + SMC PDTR; with full (the daemon's 1 Hz slow tick) also
+        VD0R/ID0R/ACPW, whose latest v/a/acpw_w hold the last full read in between (each SMC key read
+        costs two busy-waiting SMC transactions). valid: PDTR valid and an ACPW 10 s median available."""
         wall = time.time() if wall is None else wall
         p = self.rapl.power(now) if self.rapl is not None else {}
-        smc = self.smc.read_many(["PDTR", "VD0R", "ID0R", "ACPW"]) if self.smc is not None and self.smc.ok else {}
+        keys = FULL_SMC_KEYS if full else FAST_SMC_KEYS
+        smc = self.smc.read_many(list(keys)) if self.smc is not None and self.smc.ok else {}
         pdtr = smc.get("PDTR")
-        acpw = smc.get("ACPW")
-        acpw_w = acpw / 1000.0 if type(acpw) is int and 30_000 <= acpw <= 100_000 else None  # 30..100 W
-        valid = _valid_input(pdtr) and acpw_w is not None
+        pdtr_w = pdtr if _valid_input(pdtr) else None
+        if full:
+            acpw = smc.get("ACPW")
+            self.held = {"v": smc.get("VD0R"), "a": smc.get("ID0R"),   # ACPW sanity: 30..100 W
+                         "acpw_w": acpw / 1000.0 if type(acpw) is int and 30_000 <= acpw <= 100_000 else None}
+        fresh = self.held if full else {}   # windows get each 1 Hz value once
+        for key, val in (("input", pdtr_w), ("pkg", p.get("package")), ("core", p.get("core")),
+                         ("uncore", p.get("uncore")), ("dram", p.get("dram")), ("acpw", fresh.get("acpw_w")),
+                         ("v", fresh.get("v")), ("a", fresh.get("a"))):
+            self.w[key].push(now, val)
+        valid = pdtr_w is not None and self.w["acpw"].median(now, 10.0) is not None
         if valid:
             self.last_valid_mono = now
-        s = {"ts": wall, "mono": now, "valid": valid, "pdtr_w": pdtr if _valid_input(pdtr) else None,
-             "v": smc.get("VD0R"), "a": smc.get("ID0R"), "acpw_w": acpw_w,
+        s = {"ts": wall, "mono": now, "valid": valid, "pdtr_w": pdtr_w,
+             "v": self.held["v"], "a": self.held["a"], "acpw_w": self.held["acpw_w"],
              "package_w": p.get("package"), "core_w": p.get("core"), "uncore_w": p.get("uncore"),
              "dram_w": p.get("dram")}
-        for key, val in (("input", s["pdtr_w"]), ("pkg", s["package_w"]), ("core", s["core_w"]),
-                         ("uncore", s["uncore_w"]), ("dram", s["dram_w"]), ("acpw", acpw_w),
-                         ("v", s["v"]), ("a", s["a"])):
-            self.w[key].push(now, val)
         self._peak("input_w", s["pdtr_w"], wall)
         self._peak("pkg_w", s["package_w"], wall)
-        self._peak("a", s["a"], wall)
+        self._peak("a", fresh.get("a"), wall)
         self.latest = s
         return s
 
     def slow(self, now: float, wall: float | None = None) -> dict[str, Any]:
         """1 Hz reads: MSRs, limits, extra SMC keys, temps, fans, GPU, CPU/proc.
 
+        The extra SMC rails and the applesmc temperatures are re-read only every smc_slow_every_s
+        of `now` (the previous dicts are returned in between); fans: see read_fans.
         Gpu.read() guards itself: while off or mid-change it reads only the
         switcheroo file and PCI power_state."""
         wall = time.time() if wall is None else wall
+        if due(self._smc_slow_t, now, self.smc_slow_every_s):
+            self._smc_slow = {
+                "smc": {k: _r(v, 3) for k, v in self.smc.read_many(self.extra).items()} if self.extra else {},
+                "smc_temps": read_temps(self.smc_dir)}
+            self._smc_slow_t = now
         therm = self.msr.therm_status() if self.msr is not None else None
         lim = self.msr.pkg_limit() if self.msr is not None else None
         d: dict[str, Any] = {
-            "smc": {k: _r(v, 3) for k, v in self.smc.read_many(self.extra).items()} if self.extra else {},
+            "smc": self._smc_slow["smc"],
             "msr": {"power_limited": therm["power_limited"], "thermal": therm["thermal_status"],
                     "prochot": therm["prochot"]} if therm else None,
             "msr_limits": {k: lim[k] for k in ("pl1_w", "pl2_w", "pl1_enable", "pl1_clamp", "pl2_enable",
                                                "pl2_clamp", "lock")} if lim else None,
             "limits": self.rapl.read_limits() if self.rapl is not None else None,
-            "smc_temps": read_temps(self.smc_dir),
-            "fans": read_fans(self.smc_dir),
+            "smc_temps": self._smc_slow["smc_temps"],
+            "fans": read_fans(self.smc_dir, now, self.smc_slow_every_s),
             "gpu": self.gpu.read() if self.gpu is not None else {},
             "cpu": self.cpu.read(now) if self.cpu is not None else {},
         }
@@ -143,9 +163,11 @@ class Sampler:
                 "acpw_w": self.w["acpw"].median(now, 10.0)}
 
     def aggregate(self, now: float, wall: float, ceiling_w: float, gov: dict[str, Any],
-                  fan: dict[str, Any] | None = None) -> dict[str, Any]:
-        """The 1 Hz record: logged as one JSONL line and kept in the 600 s ring. fan: FanController.log_record()."""
-        d = self.derived(now, ceiling_w)
+                  fan: dict[str, Any] | None = None, derived: dict[str, Any] | None = None,
+                  meter: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The 1 Hz record: logged as one JSONL line and kept in the 600 s ring. fan: FanController.log_record();
+        derived: this tick's derived(now, ceiling_w) if already computed; meter: the daemon's own CPU/RSS."""
+        d = derived if derived is not None else self.derived(now, ceiling_w)
         sd = self.slow_data
         gpu = sd.get("gpu") or {}
         rec = {
@@ -165,6 +187,8 @@ class Sampler:
         rec["sysfs_limits"] = {"pl1_w": lim.get("pl1_w"), "pl2_w": lim.get("pl2_w"), "enabled": lim.get("enabled")}
         if fan is not None:
             rec["fan"] = fan
+        if meter is not None:
+            rec["self"] = meter
         with self.hist_lock:
             self.history.append(rec)
         return rec

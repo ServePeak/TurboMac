@@ -10,6 +10,7 @@ field stays None, which the TUI shows as "-"):
   ts, latest.ts            rec.ts (+ loop offset)
   host / version / boot_id "replay" / this turbomac / header boot_id
   daemon_uptime_s          seconds since the first record
+  self                     rec.self (turbomacd's own cpu_pct / rss_mib; None in logs from before it)
   latest                   pdtr_w = input_w (the log has 1 s means, not 4 Hz samples), v, a,
                            acpw_w, package_w = pkg_w, core_w, uncore_w, dram_w; valid = smc_valid
   derived                  input_mean_1s = input_w, input_max_1s = input_max_w,
@@ -184,7 +185,7 @@ class ReplayBackend(SimBackend):
                    last_result=self.gpu_result)
         return {
             "ts": rec["ts"], "host": "replay", "version": __version__, "boot_id": self.header.get("boot_id"),
-            "daemon_uptime_s": round(rec["ts"] - self.t0, 1),
+            "daemon_uptime_s": round(rec["ts"] - self.t0, 1), "self": rec.get("self"),
             "latest": {"ts": rec["ts"], "mono": rec["ts"] - self.t0, "valid": bool(rec.get("smc_valid")),
                        "pdtr_w": rec.get("input_w"), "v": rec.get("v"), "a": rec.get("a"), "acpw_w": acpw,
                        "package_w": rec.get("pkg_w"), "core_w": rec.get("core_w"),

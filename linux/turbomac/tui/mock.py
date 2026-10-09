@@ -317,6 +317,7 @@ class MockBackend(SimBackend):
         self.incident_check = {"verdict": "abrupt", "reason": "previous boot journal does not end in "
                                "'Journal stopped'", "incident_id": self.incident_list[0]["id"]}
         self._snapshot: dict[str, Any] | None = None
+        self.meter: dict[str, Any] | None = None   # Daemon.meter: turbomacd's own CPU/RSS (simulated)
         self.emit("boot_check", **self.incident_check)
         self.fanctl = FanController(None, self, io=_FanIO(self.sim), clock=self.wall)
         self.fanctl.start(self.config["fan"])
@@ -350,8 +351,8 @@ class MockBackend(SimBackend):
         self.t += DT
         now, wall = self.mono0 + self.t, self.wall()
         self.sim.step(DT, self.config)
-        self.sampler.fast(now, wall)
         slow = self.ticks % 4 == 0
+        self.sampler.fast(now, wall, full=slow)   # as in Daemon.tick
         if slow:
             sd = self.sampler.slow(now, wall)
             sd["smc_temps"], sd["fans"] = self.sim.smc_temps(), self.sim.fans()
@@ -370,10 +371,11 @@ class MockBackend(SimBackend):
                 self.emit("write", **self.last_write)
         if slow:   # as in Daemon.tick: the fan step runs after the governor, before the log record
             temp = ((sd.get("cpu") or {}).get("temps") or {}).get("pkg_c")
-            pkg = self.sampler.derived(now, self.config["governor"]["ceiling_w"])["pkg_median_1s"]
-            self.fanctl.tick(now, temp, pkg, self.config["fan"])
+            der = self.sampler.derived(now, self.config["governor"]["ceiling_w"])
+            self.fanctl.tick(now, temp, der["pkg_median_1s"], self.config["fan"])
+            self.meter = {"cpu_pct": 1.6 if self.sim.burst()[0] else 1.1, "rss_mib": 38.6}
             self.sampler.aggregate(now, wall, self.config["governor"]["ceiling_w"], governor.summary(self.gov),
-                                   fan=self.fanctl.log_record())
+                                   fan=self.fanctl.log_record(), derived=der, meter=self.meter)
         self.ticks += 1
         self._snapshot = None
 

@@ -8,6 +8,8 @@ from typing import Any
 from turbomac.daemon.paths import Paths
 from turbomac.daemon.sysfs import read_int, read_text, write_text
 
+TOP_EVERY_S = 5.0   # the /proc/<pid>/stat scan (hundreds of files) runs at most this often
+
 
 def find_hwmon(hwmon_root: str, name: str) -> str | None:
     for d in sorted(glob.glob(os.path.join(hwmon_root, "hwmon*"))):
@@ -36,9 +38,10 @@ def _milli(path: str) -> float | None:
 
 
 class CpuReader:
-    def __init__(self, paths: Paths, top_n: int = 8) -> None:
+    def __init__(self, paths: Paths, top_n: int = 8, top_every_s: float = TOP_EVERY_S) -> None:
         self.paths = paths
         self.top_n = top_n
+        self.top_every_s = top_every_s
         self.coretemp = find_hwmon(paths.hwmon, "coretemp")
         self.nvme = find_hwmon(paths.hwmon, "nvme")
         self.pkg_zone = None
@@ -48,19 +51,34 @@ class CpuReader:
         self.cpus = sorted(glob.glob(os.path.join(paths.cpu, "cpu[0-9]*")),
                            key=lambda p: int(os.path.basename(p)[3:]))
         self.pstate = os.path.join(paths.cpu, "intel_pstate")
+        # per-cpu files never change while the daemon runs: build the path lists once
+        self._freq_paths = [os.path.join(c, "cpufreq", "scaling_cur_freq") for c in self.cpus]
+        self._core_thr_paths = [os.path.join(c, "thermal_throttle", "core_throttle_count") for c in self.cpus]
+        self._pkg_thr_paths = [os.path.join(c, "thermal_throttle", "package_throttle_count") for c in self.cpus]
+        self._coretemp_sensors: list[tuple[str, str]] | None = None   # (temp*_input, label), found on first use
         self._stat_prev: dict[str, tuple[int, int]] | None = None
         self._procs_prev: dict[int, int] = {}
         self._procs_t: float | None = None
+        self._top_cache: list[dict[str, Any]] = []
         try:
             self.hz = os.sysconf("SC_CLK_TCK")
         except (ValueError, OSError, AttributeError):
             self.hz = 100
 
+    def _coretemp(self) -> list[tuple[str, str]]:
+        """coretemp temp*_input paths with their label text, globbed once (an empty result is retried)."""
+        if self._coretemp_sensors is None and self.coretemp:
+            found = [(p, read_text(p.replace("_input", "_label"), "", quiet=True) or os.path.basename(p))
+                     for p in sorted(glob.glob(os.path.join(self.coretemp, "temp*_input")))]
+            if found:
+                self._coretemp_sensors = found
+            return found
+        return self._coretemp_sensors or []
+
     def temps(self) -> dict[str, Any]:
         out: dict[str, Any] = {"cores": {}}
         if self.coretemp:
-            for p in sorted(glob.glob(os.path.join(self.coretemp, "temp*_input"))):
-                label = read_text(p.replace("_input", "_label"), "", quiet=True) or os.path.basename(p)
+            for p, label in self._coretemp():
                 val = _milli(p)
                 if label.startswith("Package"):
                     out["pkg_c"] = val
@@ -90,6 +108,10 @@ class CpuReader:
         return pct("cpu"), [pct(n) for n in names]
 
     def _top(self, now: float) -> list[dict[str, Any]]:
+        """Top processes by CPU% over the interval since the previous scan. Scans /proc at most every
+        top_every_s of `now`; in between the previous (stale) list is returned unchanged."""
+        if self._procs_t is not None and 0 <= now - self._procs_t < self.top_every_s:
+            return self._top_cache
         cur: dict[int, int] = {}
         for entry in os.scandir(self.paths.proc) if os.path.isdir(self.paths.proc) else []:
             if not entry.name.isdigit():
@@ -102,19 +124,21 @@ class CpuReader:
                 continue
         prev, prev_t = self._procs_prev, self._procs_t
         self._procs_prev, self._procs_t = cur, now
+        self._top_cache = []
         if prev_t is None or now <= prev_t:
-            return []
+            return self._top_cache
         scale = 100.0 / (self.hz * (now - prev_t))
         deltas = sorted(((t - prev[p], p) for p, t in cur.items() if p in prev and t > prev[p]), reverse=True)
         out = []
         for d, pid in deltas[: self.top_n]:
             name = read_text(os.path.join(self.paths.proc, str(pid), "comm"), "?", quiet=True)
             out.append({"pid": pid, "name": name, "cpu_pct": round(d * scale, 1)})
+        self._top_cache = out
         return out
 
     def read(self, now: float) -> dict[str, Any]:
         total, per_cpu = self._busy()
-        freqs = [read_int(os.path.join(c, "cpufreq", "scaling_cur_freq"), quiet=True) for c in self.cpus]
+        freqs = [read_int(p, quiet=True) for p in self._freq_paths]
         load = (read_text(os.path.join(self.paths.proc, "loadavg"), "", quiet=True) or "").split()[:3]
         mem: dict[str, int] = {}
         for line in (read_text(os.path.join(self.paths.proc, "meminfo"), "", quiet=True) or "").splitlines():
@@ -122,8 +146,8 @@ class CpuReader:
             if k in ("MemTotal", "MemAvailable"):
                 mem[k] = int(v.split()[0]) // 1024
         up = (read_text(os.path.join(self.paths.proc, "uptime"), "", quiet=True) or "").split()
-        core_thr = [read_int(os.path.join(c, "thermal_throttle", "core_throttle_count"), quiet=True) for c in self.cpus]
-        pkg_thr = [read_int(os.path.join(c, "thermal_throttle", "package_throttle_count"), quiet=True) for c in self.cpus]
+        core_thr = [read_int(p, quiet=True) for p in self._core_thr_paths]
+        pkg_thr = [read_int(p, quiet=True) for p in self._pkg_thr_paths]
         return {
             "temps": self.temps(),
             "mhz": [round(f / 1000) if f else None for f in freqs],

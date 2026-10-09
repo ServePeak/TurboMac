@@ -55,12 +55,16 @@ class ShapeTest(unittest.TestCase):
 
     def test_mock_status_has_every_build_status_key(self):
         from turbomac.tui.mock import MockBackend
-        self.assert_shape(MockBackend(seed=3, warmup_s=30).status(), exact=True)
+        st = MockBackend(seed=3, warmup_s=30).status()
+        self.assert_shape(st, exact=True)
+        self.assertEqual(set(st["self"]), set(self.ref["self"]))
+        self.assertIsInstance(st["self"]["cpu_pct"], float)
 
     def test_replay_status_has_every_build_status_key(self):
         from turbomac.tui.replay import ReplayBackend
         r = ReplayBackend(FIXTURE)
         self.assert_shape(r.status(), exact=False)
+        self.assertIsNone(r.status()["self"])                 # a log from before the self meter
         r.advance(120)
         self.assert_shape(r.status(), exact=False)
 

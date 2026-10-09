@@ -17,6 +17,15 @@ from typing import Any, Callable
 from turbomac.daemon.sysfs import read_int, read_text, warn_once, write_text
 
 RESCAN_MIN_INTERVAL_S = 60.0   # a full scan takes seconds; a competing reader must not trigger one per read
+# Every applesmc read busy-waits in the kernel (~0.23 ms CPU per SMC transaction): slow-changing SMC
+# values (temperatures, the extra rails, fan min/max/manual) are refreshed only this often.
+SMC_SLOW_EVERY_S = 3.0
+DUE_SLACK_S = 0.1   # loop jitter: a 1 Hz reader is due on every 3rd slow tick, not sometimes the 4th
+
+
+def due(last: float | None, now: float, every_s: float) -> bool:
+    """True when a value read at `last` should be read again at `now` (always when every_s <= 0)."""
+    return last is None or not (0 <= now - last < every_s - DUE_SLACK_S)
 
 
 def decode(typ: str, data: bytes) -> Any:
@@ -195,29 +204,73 @@ def _idx(path: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+# The applesmc sensor files do not change while the daemon runs: each base directory is globbed
+# once (an empty result is retried) and its label text cached; the values are read every call.
+_TEMP_SENSORS: dict[str, list[tuple[str, str]]] = {}                    # base -> [(temp*_input, label)]
+_FAN_SENSORS: dict[str, list[tuple[str, str | None, str, str, str]]] = {}  # base -> [(input, label, min, max, manual)]
+_FAN_LIMITS: dict[str, tuple[float, list[tuple[int | None, ...]]]] = {}   # base -> (read at, [(min, max, manual)])
+
+
+def clear_caches() -> None:
+    """Forget the discovered sensor files and the cached fan min/max/manual (tests)."""
+    _TEMP_SENSORS.clear()
+    _FAN_SENSORS.clear()
+    _FAN_LIMITS.clear()
+
+
+def _temp_sensors(base: str) -> list[tuple[str, str]]:
+    found = _TEMP_SENSORS.get(base)
+    if found is None:
+        found = []
+        for p in sorted(glob.glob(os.path.join(base, "temp*_input")), key=_idx):
+            n = _idx(p)
+            found.append((p, read_text(os.path.join(base, f"temp{n}_label"), f"temp{n}", quiet=True) or f"temp{n}"))
+        if found:
+            _TEMP_SENSORS[base] = found
+    return found
+
+
+def _fan_sensors(base: str) -> list[tuple[str, str | None, str, str, str]]:
+    found = _FAN_SENSORS.get(base)
+    if found is None:
+        found = []
+        for p in sorted(glob.glob(os.path.join(base, "fan*_input")), key=_idx):
+            n = _idx(p)
+            f = lambda s: os.path.join(base, f"fan{n}_{s}")  # noqa: E731
+            found.append((p, read_text(f("label"), f"fan{n}", quiet=True), f("min"), f("max"), f("manual")))
+        if found:
+            _FAN_SENSORS[base] = found
+    return found
+
+
 def read_temps(base: str | None) -> dict[str, float]:
     """applesmc temp*_input by label, invalid values (<= -100 or >= 150 C) dropped."""
     out: dict[str, float] = {}
     if not base:
         return out
-    for p in sorted(glob.glob(os.path.join(base, "temp*_input")), key=_idx):
+    for p, label in _temp_sensors(base):
         v = read_int(p, quiet=True)
         if v is None or not (-100.0 < v / 1000.0 < 150.0):
             continue
-        n = _idx(p)
-        label = read_text(os.path.join(base, f"temp{n}_label"), f"temp{n}", quiet=True) or f"temp{n}"
         out[label] = round(v / 1000.0, 1)
     return out
 
 
-def read_fans(base: str | None) -> list[dict[str, Any]]:
+def read_fans(base: str | None, now: float | None = None, every_s: float = SMC_SLOW_EVERY_S) -> list[dict[str, Any]]:
+    """fan*_input every call; the label (cached once) and min/max/manual, re-read at most every every_s
+    of `now` (default: the monotonic clock). The fan floor's own read-back of fan*_min is in fans.py."""
     out: list[dict[str, Any]] = []
     if not base:
         return out
-    for p in sorted(glob.glob(os.path.join(base, "fan*_input")), key=_idx):
-        n = _idx(p)
-        f = lambda s: os.path.join(base, f"fan{n}_{s}")  # noqa: E731
-        out.append({"label": read_text(f("label"), f"fan{n}", quiet=True), "rpm": read_int(p, quiet=True),
-                    "min": read_int(f("min"), quiet=True), "max": read_int(f("max"), quiet=True),
-                    "manual": read_int(f("manual"), quiet=True)})
+    sensors = _fan_sensors(base)
+    now = time.monotonic() if now is None else now
+    cached = _FAN_LIMITS.get(base)
+    if cached is None or len(cached[1]) != len(sensors) or due(cached[0], now, every_s):
+        limits = [(read_int(mn, quiet=True), read_int(mx, quiet=True), read_int(manual, quiet=True))
+                  for _, _, mn, mx, manual in sensors]
+        _FAN_LIMITS[base] = (now, limits)
+    else:
+        limits = cached[1]
+    for (p, label, *_), (mn, mx, manual) in zip(sensors, limits):
+        out.append({"label": label, "rpm": read_int(p, quiet=True), "min": mn, "max": mx, "manual": manual})
     return out

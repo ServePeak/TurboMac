@@ -49,10 +49,12 @@ def render_status(s: dict[str, Any]) -> str:
     sysfs, ml, fw = lim.get("sysfs") or {}, lim.get("msr") or {}, lim.get("firmware") or {}
     temps = cpu.get("temps") or {}
     up = s.get("daemon_uptime_s") or 0
+    me = s.get("self") or {}
     lines = [
         f"TurboMac {s.get('version')} on {s.get('host')}  governor {str(gov.get('mode')).upper()}  "
         f"state {gov.get('state')} for {_dur(gov.get('in_state_s'))}"
-        f"  daemon up {_dur(up)}" + ("" if s.get("smc_ok") else "  [SMC UNAVAILABLE]"),
+        f"  daemon up {_dur(up)}" + ("" if s.get("smc_ok") else "  [SMC UNAVAILABLE]")
+        + f"  daemon {_f(me.get('cpu_pct'))} % of a core, {_f(me.get('rss_mib'))} MiB",
         f"input   {_f(der.get('input_mean_1s'))} W (1 s mean)  latest {_f(lat.get('pdtr_w'))} W  "
         f"{_f(lat.get('v'), '{:.2f}')} V x {_f(lat.get('a'), '{:.2f}')} A  ACPW {_f(der.get('acpw_median_10s'), '{:.2f}')} W  "
         f"headroom {_f(der.get('headroom_w'))} W",

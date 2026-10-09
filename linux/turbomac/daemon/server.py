@@ -21,6 +21,13 @@ class _Conn(socketserver.StreamRequestHandler):
     timeout = IDLE_TIMEOUT_S   # idle request connections are closed; also bounds a stalled subscriber
 
     def handle(self) -> None:
+        self.server.client_count(+1)
+        try:
+            self._serve()
+        finally:
+            self.server.client_count(-1)
+
+    def _serve(self) -> None:
         while not self.server.stopping.is_set():
             try:
                 line = self.rfile.readline(protocol.MAX_REQUEST + 1)
@@ -72,6 +79,8 @@ class ControlServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     def __init__(self, path: str, dispatch: Handler, group: str = "turbomac") -> None:
         self.dispatch = dispatch
         self.stopping = threading.Event()
+        self.clients = 0   # connections being handled; the daemon builds a 4 Hz status only while > 0
+        self._clients_lock = threading.Lock()
         if os.path.dirname(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
@@ -95,6 +104,10 @@ class ControlServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             pass
         self.path = path
         self.thread = threading.Thread(target=self.serve_forever, name="control-socket", daemon=True)
+
+    def client_count(self, delta: int) -> None:
+        with self._clients_lock:
+            self.clients += delta
 
     def start(self) -> None:
         self.thread.start()

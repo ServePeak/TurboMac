@@ -62,3 +62,38 @@ and applied on the host), since noise does not matter on a closed-lid server.
 - `turbomacctl events` prints non-ASCII reason text unescaped.
 - Two TUI timer callbacks were made safe during shutdown (a pre-existing race
   that the larger Settings screen made visible).
+
+# Phase 4 item 2 — daemon CPU tidy-up, 2026-10-09 23:30–23:55 UTC
+
+Baseline on old-mac: 5.13 % of one core over 120 s with no client attached
+(user 1.2 %, system 2.4 %). The system share is the applesmc driver busy-waiting
+on the SMC port: one sysfs read of an SMC sensor costs 0.23 ms of CPU, and a
+selector key read is two transactions (name + data). The daemon was doing about
+93 SMC transactions per second.
+
+Changes (no governor change; PDTR still 4 Hz through the selector with the name
+check on every read):
+
+| | Before | After |
+|---|---|---|
+| /proc process scan for the top-8 list | every 1 s | every 5 s |
+| sysfs discovery of sensors (glob + labels) | every 1 s | once |
+| `derived()` per tick | up to 3× | 1× |
+| status snapshot | every 250 ms | every 250 ms only while a client is connected, else 1 Hz |
+| ACPW / VD0R / ID0R reads | 4 Hz | 1 Hz (PDTR stays 4 Hz) |
+| applesmc temperatures, SMC rails, fan min/max/manual | 1 Hz | every 3 s (fan rpm and coretemp stay 1 Hz) |
+| SMC transactions per second | ≈ 93 | ≈ 37 |
+
+Measured with the same 120 s method:
+
+| | CPU of one core | user / system |
+|---|---|---|
+| baseline | 5.13 % | 1.2 / 2.4 |
+| round 1 (scan, caches, snapshot) | 3.54 % | – |
+| round 2 (+ SMC diet) | **2.09 %** | 0.85 / 1.23 |
+| round 2 with `turbomacctl watch` attached | 2.33 % | – |
+
+RSS 26 MiB. The daemon now reports its own CPU and memory in `status`
+(`self.cpu_pct`, `self.rss_mib`), on the first line of `turbomacctl status`,
+and in the TUI header on wide terminals. `turbomacctl status` with no other
+client connected can be up to 1 s old by design.

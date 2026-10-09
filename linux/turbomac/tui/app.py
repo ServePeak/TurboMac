@@ -36,7 +36,7 @@ def series(s: dict[str, Any]) -> dict[str, Any]:
 
 
 class HeaderBar(Widget):
-    """host · OS · uptime · governor mode/state/time in state ........ SMC · connection · clock."""
+    """host · OS · uptime · governor mode/state/time in state ...... daemon CPU · SMC · connection · clock."""
 
     DEFAULT_CSS = "HeaderBar { height: 1; }"
 
@@ -54,6 +54,9 @@ class HeaderBar(Widget):
         smc.append("ok" if smc_ok else (DASH if smc_ok is None else "DOWN"),
                    fmt.GREEN if smc_ok else (DIM if smc_ok is None else "bold " + fmt.RED))
         conn = fmt.text("● ", fmt.GREEN) if be.connected else fmt.text("○ disconnected", "bold " + fmt.RED)
+        me = fmt.text("daemon ", DIM)
+        me.append(fmt.num((s.get("self") or {}).get("cpu_pct"), "%"))
+        me.append(" · ", DIM)
         clock = s.get("ts") if be.kind == "replay" else time.time()
         # (priority, side, text): the lowest priorities are dropped first when the line is too narrow
         segs = [(9, "L", fmt.text(" TurboMac ", "bold #ffffff on #1f6feb")),
@@ -62,6 +65,7 @@ class HeaderBar(Widget):
                 (3, "L", fmt.text(f" · up {fmt.dur(cpu.get('uptime_s'))}", DIM)),
                 (8, "L", state),
                 (9, "R", fmt.text(" PAUSED ", "bold #0b0e14 on #f0a020") + Text(" ") if app.paused else Text()),
+                (0, "R", me),   # dropped first: the header is unchanged when the line is full
                 (5, "R", smc),
                 (1, "R", fmt.text(f" {app.smc_keys} keys", DIM) if app.smc_keys is not None else Text()),
                 (9, "R", fmt.text(" · ") + conn),

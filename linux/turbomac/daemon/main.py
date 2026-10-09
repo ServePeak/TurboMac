@@ -29,6 +29,16 @@ WATCHDOG_MAX_STEP_AGE_S = 5.0   # ping only if a governor step succeeded this re
 GPU_RETRY_EVERY_S = 15.0
 GPU_RETRIES = 12
 GPU_RETRYABLE = ("amdgpu device not found", "amdgpu hwmon not found", "vga_switcheroo not available")
+try:
+    PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
+except (ValueError, OSError, AttributeError):
+    PAGE_SIZE = 4096
+
+
+def _cpu_seconds() -> float:
+    """This process's user + system CPU time, all threads. The same sum os.times() gives, but at
+    nanosecond resolution: os.times() counts 10 ms clock ticks, i.e. 1 % steps over a 1 s window."""
+    return time.process_time()
 
 
 def sd_notify(msg: str) -> bool:
@@ -79,6 +89,8 @@ class Daemon:
         self.gpu_retry_left = 0               # > 0 while the startup GPU apply is being retried
         self.gpu_retry_next: float | None = None
         self.fanctl: FanController | None = None
+        self.meter: dict[str, Any] | None = None   # {"cpu_pct", "rss_mib"}: the daemon's own use, 1 Hz
+        self._meter_prev = (time.monotonic(), _cpu_seconds())
 
     # setup -------------------------------------------------------------------
     def setup(self, start_server: bool = True) -> None:
@@ -166,7 +178,7 @@ class Daemon:
         """One 250 ms step. Telemetry, fan, logging and status errors never skip governor.step."""
         wall = time.time()
         try:
-            self.sampler.fast(now, wall)
+            self.sampler.fast(now, wall, full=slow)   # VD0R/ID0R/ACPW at 1 Hz, PDTR every tick
         except Exception as exc:  # noqa: BLE001 - an unreadable sample is invalid, never stale-valid
             self.sampler.latest = {"ts": wall, "mono": now, "valid": False}
             self._error("sample_error", exc, now)
@@ -184,32 +196,64 @@ class Daemon:
         for a in actions:
             self.apply(a)
         self.last_step_ok = now
+        # The status snapshot is rebuilt every tick only while a socket client is connected (the TUI and
+        # `turbomacctl watch` subscribe); otherwise only on the 1 Hz slow tick. dispatch("status") returns
+        # the latest snapshot, so a `turbomacctl status` with no other client connected may be up to 1 s old.
+        snapshot = slow or (self.server is not None and self.server.clients > 0)
+        der = None
+        if snapshot:   # one derived() per tick, shared by the fan step, the log record and the status
+            try:
+                der = self.sampler.derived(now, cfg["governor"]["ceiling_w"])
+            except Exception:  # noqa: BLE001 - each consumer then recomputes and reports its own error
+                der = None
         if slow:   # after the governor: an SMC fan write can never delay a power-limit decision
-            self._fan_step(now, fresh)
+            self._fan_step(now, fresh, der)
+            self._meter_step(now)
         if slow and self.logger is not None:
             try:
                 rec = self.sampler.aggregate(now, wall, cfg["governor"]["ceiling_w"], governor.summary(self.gov),
-                                             fan=self.fanctl.log_record() if self.fanctl is not None else None)
+                                             fan=self.fanctl.log_record() if self.fanctl is not None else None,
+                                             derived=der, meter=self.meter)
                 self.logger.write(rec)
             except Exception as exc:  # noqa: BLE001
                 self._error("log_error", exc, now)
         self._maybe_retry_gpu(now)
-        try:
-            self.status_snapshot = self.build_status(now)
-        except Exception as exc:  # noqa: BLE001
-            self._error("status_error", exc, now)
+        if snapshot:
+            try:
+                self.status_snapshot = self.build_status(now, der)
+            except Exception as exc:  # noqa: BLE001
+                self._error("status_error", exc, now)
 
-    def _fan_step(self, now: float, fresh: bool) -> None:
+    def _fan_step(self, now: float, fresh: bool, der: dict[str, Any] | None = None) -> None:
         """1 Hz fan floor: package °C (only from this tick's slow sample) and the 1 s package median."""
         if self.fanctl is None:
             return
         try:
             cfg = self.config
             temps = ((self.sampler.slow_data.get("cpu") or {}).get("temps") or {}) if fresh else {}
-            pkg = self.sampler.derived(now, cfg["governor"]["ceiling_w"])["pkg_median_1s"]
-            self.fanctl.tick(now, temps.get("pkg_c"), pkg, cfg["fan"])
+            if der is None:
+                der = self.sampler.derived(now, cfg["governor"]["ceiling_w"])
+            self.fanctl.tick(now, temps.get("pkg_c"), der["pkg_median_1s"], cfg["fan"])
         except Exception as exc:  # noqa: BLE001 - never skips the governor step
             self._error("fan_error", exc, now)
+
+    def _meter_step(self, now: float) -> None:
+        """1 Hz self-metering: own CPU (user + system over wall time, % of one core) and RSS in MiB."""
+        try:
+            cpu_s = _cpu_seconds()
+            (prev_t, prev_cpu), self._meter_prev = self._meter_prev, (now, cpu_s)
+            dt = now - prev_t
+            self.meter = {"cpu_pct": round(100.0 * (cpu_s - prev_cpu) / dt, 1) if dt > 0 else None,
+                          "rss_mib": self._rss_mib()}
+        except Exception as exc:  # noqa: BLE001 - never skips the governor step
+            self._error("meter_error", exc, now)
+
+    def _rss_mib(self) -> float | None:
+        fields = (read_text(os.path.join(self.paths.proc, "self", "statm"), "", quiet=True) or "").split()
+        try:
+            return round(int(fields[1]) * PAGE_SIZE / 2**20, 1)
+        except (IndexError, ValueError):
+            return None
 
     def apply(self, action: dict[str, Any]) -> None:
         if action["op"] == "event":
@@ -284,13 +328,16 @@ class Daemon:
         self.events.emit("stopped")
 
     # status and requests ---------------------------------------------------------
-    def build_status(self, now: float) -> dict[str, Any]:
+    def build_status(self, now: float, der: dict[str, Any] | None = None) -> dict[str, Any]:
+        """der: this tick's sampler.derived() when the caller already has it."""
         cfg = self.config
         sd = self.sampler.slow_data
-        der = self.sampler.derived(now, cfg["governor"]["ceiling_w"])
+        if der is None:
+            der = self.sampler.derived(now, cfg["governor"]["ceiling_w"])
         return {
             "ts": round(time.time(), 3), "host": socket.gethostname(), "version": __version__,
             "boot_id": self.boot_id, "daemon_uptime_s": round(time.time() - self.started_wall, 1),
+            "self": self.meter,
             "latest": self.sampler.latest, "derived": der,
             "thresholds": governor.thresholds(der["acpw_median_10s"], cfg["governor"]),
             "governor": {"mode": cfg["governor"]["mode"], **governor.summary(self.gov),
