@@ -29,6 +29,17 @@ def _yn(v: Any) -> str:
     return "?" if v is None else ("YES" if v else "no")
 
 
+def fan_floor_text(fan: dict[str, Any] | None) -> str:
+    """'floor 3500 rpm (power 31 W ≥ 25 W)', or 'floor off' (no floor written, the SMC curve alone)."""
+    fan = fan or {}
+    t = fan.get("target_rpm")
+    if fan.get("mode") == "floor" and isinstance(t, int) and t > 0:
+        out = f"floor {t} rpm ({fan.get('reason')})"
+    else:
+        out = "floor off" + (" (fan.mode auto)" if fan.get("mode") == "auto" else "")
+    return out + (f"  write errors {fan['write_errors']}" if fan.get("write_errors") else "")
+
+
 def render_status(s: dict[str, Any]) -> str:
     if not s:
         return "daemon has no sample yet"
@@ -61,7 +72,8 @@ def render_status(s: dict[str, Any]) -> str:
         f"dpm {gpu.get('dpm_level') or '-'}  rt {gpu.get('runtime_status') or '-'}  pci {gpu.get('power_state') or '-'}",
         f"temps   pkg {_f(temps.get('pkg_c'), '{:.0f}')} C  nvme {_f(temps.get('nvme_c'), '{:.0f}')} C  "
         + "  ".join(f"{k} {_f(v, '{:.0f}')}" for k, v in (temps.get("cores") or {}).items()),
-        "fans    " + ("  ".join(f"{f.get('label')} {f.get('rpm')} rpm" for f in s.get("fans") or []) or "-"),
+        "fans    " + ("  ".join(f"{f.get('label')} {f.get('rpm')} rpm" for f in s.get("fans") or []) or "-")
+        + ("  " + fan_floor_text(s["fan"]) if s.get("fan") else ""),
         f"counts  cuts {cnt.get('cuts', 0)}  emergencies {cnt.get('emergencies', 0)}  fallbacks {cnt.get('fallbacks', 0)}  "
         f"recoveries {cnt.get('recoveries', 0)}  writes {cnt.get('writes', 0)}  readback failures {cnt.get('readback_failures', 0)}",
         "peaks   " + "  ".join(f"{k} {v['value']:g} @ {_hms(v['ts'])}" for k, v in (s.get("peaks") or {}).items()),
@@ -82,10 +94,13 @@ def watch_line(s: dict[str, Any]) -> str:
     lat, der, gov = s.get("latest") or {}, s.get("derived") or {}, s.get("governor") or {}
     msr = s.get("msr") or {}
     temps = (s.get("cpu") or {}).get("temps") or {}
+    fan = s.get("fan") or {}
+    floor = fan.get("target_rpm") if fan.get("mode") == "floor" else None
     return (f"{_hms(s.get('ts'))}  in {_f(lat.get('pdtr_w')):>5} W  1s {_f(der.get('input_mean_1s')):>5}  "
             f"pkg {_f(lat.get('package_w')):>5} W  PL1 {_f(gov.get('pl1_w'), '{:g}'):>3}  {gov.get('state', '?'):<9}  "
             f"gpu {_f((s.get('gpu') or {}).get('power_w')):>4} W  {_f(temps.get('pkg_c'), '{:.0f}'):>3} C"
-            + ("  PL!" if msr.get("power_limited") else "") + ("  THERM!" if msr.get("thermal") else ""))
+            + ("  PL!" if msr.get("power_limited") else "") + ("  THERM!" if msr.get("thermal") else "")
+            + (f" fan {floor}" if isinstance(floor, int) and floor > 0 else ""))
 
 
 def parse_assignments(items: list[str]) -> dict[str, Any]:
@@ -190,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                 out(r)
             else:
                 for ev in r:
-                    rest = " ".join(f"{k}={json.dumps(v, default=str)}" for k, v in ev.items() if k not in ("ts", "type"))
+                    rest = " ".join(f"{k}={json.dumps(v, default=str, ensure_ascii=False)}" for k, v in ev.items() if k not in ("ts", "type"))
                     print(f"{_hms(ev.get('ts'))} {ev.get('type'):<16} {rest}")
         elif a.cmd == "smc-keys":
             r = cl.call("smc.keys")

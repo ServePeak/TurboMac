@@ -13,6 +13,9 @@ PLAN_DEFAULTS = {
                  "shed_ratio": 0.88, "emergency_ratio": 0.94, "recover_ratio": 0.78,
                  "cut_step_w": 5, "recover_step_w": 1, "recover_interval_s": 3, "stale_timeout_s": 2},
     "gpu": {"mode": "auto", "cap_w": 15},
+    "fan": {"mode": "floor", "power_floor_w": 25, "power_floor_rpm": 3500,             # Phase 4 fan floor
+            "t1_c": 78, "t1_rpm": 3500, "t2_c": 84, "t2_rpm": 4500, "t3_c": 90, "t3_rpm": 5500,
+            "hysteresis_c": 6, "step_down_interval_s": 20, "max_rpm": 5500},
     "cpu": {"no_turbo": None, "epp": None, "max_perf_pct": None},  # PLAN: false; null = untouched
     "logging": {"retention_days": 14, "max_mib": 1024},  # PLAN says 256; raised with gzip (audit batch 1)
 }
@@ -41,6 +44,26 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(acc, {})
         self.assertEqual(set(rej), set(bad))
         self.assertIn("10..45", rej["governor.static_cap_w"])
+
+    def test_fan_bounds_and_ladder_rules(self):
+        ok = {"fan.mode": "auto", "fan.power_floor_w": 45, "fan.power_floor_rpm": 2000, "fan.hysteresis_c": 15,
+              "fan.step_down_interval_s": 5, "fan.max_rpm": 5900}
+        self.assertEqual(config.validate(ok), (ok, {}))
+        bad = {"fan.mode": "manual", "fan.power_floor_w": 9, "fan.power_floor_rpm": 5901, "fan.t1_c": 49,
+               "fan.t3_c": 100, "fan.t2_rpm": 3500.5, "fan.hysteresis_c": 1, "fan.step_down_interval_s": 121,
+               "fan.max_rpm": 2499}
+        acc, rej = config.validate(bad)
+        self.assertEqual((acc, set(rej)), ({}, set(bad)))
+        _, rej = config.validate({"fan.t2_c": 78})                       # t1 78: must be strictly above
+        self.assertIn("t1_c must be < t2_c", rej["fan.t2_c"])
+        _, rej = config.validate({"fan.t3_c": 80})                       # below t2 84
+        self.assertIn("t2_c must be < t3_c", rej["fan.t3_c"])
+        _, rej = config.validate({"fan.t1_rpm": 4600})                   # above t2_rpm 4500
+        self.assertIn("t1_rpm must be <= t2_rpm", rej["fan.t1_rpm"])
+        acc, rej = config.validate({"fan.t1_rpm": 4500, "fan.t3_rpm": 4500})   # equal rpm steps are fine
+        self.assertEqual(rej, {})
+        acc, rej = config.validate({"fan.t1_c": 88, "fan.t2_c": 93, "fan.t3_c": 97})  # the whole ladder moves at once
+        self.assertEqual((len(acc), rej), (3, {}))
 
     def test_unknown_and_fixed_keys(self):
         acc, rej = config.validate({"governor.turbo": 1, "foo": 2, "governor.hard_max_w": 50})

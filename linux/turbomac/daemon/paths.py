@@ -90,6 +90,10 @@ class Paths:
         return os.path.join(self.state, "firmware-limits.json")
 
     @property
+    def fan_defaults(self) -> str:
+        return os.path.join(self.state, "fan-defaults.json")
+
+    @property
     def clean_marker(self) -> str:
         return os.path.join(self.state, "clean-shutdown")
 

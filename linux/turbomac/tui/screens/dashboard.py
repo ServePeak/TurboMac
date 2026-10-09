@@ -236,10 +236,26 @@ class TempsPanel(Panel):
 
 
 class FansPanel(Panel):
+    """Both fans against their hardware range, then the fan floor (Phase 4): the target on the
+    last line and its reason in the bottom border, so the panel keeps its height."""
+
+    _reason: str | None = None
+
+    def show(self, status: dict[str, Any]) -> None:
+        fan = status.get("fan") or {}
+        reason = str(fan.get("reason") or DASH) if fan and fan.get("mode") != "auto" else None
+        if reason != self._reason:
+            self._reason = reason
+            self.border_subtitle = Text(reason) if reason else None
+        super().show(status)
+
     def build(self, s: dict[str, Any], width: int, height: int) -> Text:
+        fan = s.get("fan") or {}
+        ctl = fan.get("fans") or []
         t = Text()
         for i, f in enumerate(s.get("fans") or []):
-            rpm, lo, hi = f.get("rpm"), f.get("min"), f.get("max")
+            hw = (ctl[i] if i < len(ctl) else {}).get("hw_min")
+            rpm, lo, hi = f.get("rpm"), hw if fmt.isnum(hw) else f.get("min"), f.get("max")   # fan*_min holds the floor
             label = str(f.get("label") or f"fan{i + 1}").replace(" side", "")
             if i:
                 t.append("\n")
@@ -248,6 +264,16 @@ class FansPanel(Panel):
             frac = (rpm - lo) / (hi - lo) if all(fmt.isnum(x) for x in (rpm, lo, hi)) and hi > lo else None
             t.append_text(fmt.bar(frac, max(3, width - 16), fmt.CYAN))
             t.append(f"\n      {num(lo, '', 0)}–{num(hi, 'rpm', 0)}" + (" manual" if f.get("manual") else ""), DIM)
+        if fan:
+            target, mode = fan.get("target_rpm"), fan.get("mode")
+            t.append("\nfloor " if t else "floor ", DIM)
+            if mode == "floor" and fmt.isnum(target) and target > 0:
+                t.append(num(target, "rpm", 0), "bold " + fmt.AMBER)
+            else:
+                t.append("off", "bold")
+                t.append(" · fan.mode auto" if mode == "auto" else " · SMC curve", DIM)
+            if fan.get("write_errors"):
+                t.append(f" · {fan['write_errors']} err", "bold " + fmt.RED)
         return t or Text(DASH)
 
 

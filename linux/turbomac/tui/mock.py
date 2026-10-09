@@ -5,13 +5,15 @@ Physics (all randomness from random.Random(seed)): idle is ~21 W input with a
 45 s and drives the package to PL1; every other burst also loads the dGPU to its
 cap. Input = 14.0 W + 1.21 x package + (GPU - 7 W) + fan power, lagging the
 package by ~1 s (fit to the Phase 0 receipts: 21 W idle, 56-58 W at a 35 W cap).
-Package temperature, GPU temperature and fans follow first-order lags.
+Package temperature, GPU temperature and fans follow first-order lags; the fans
+follow the SMC curve (74-92 °C) or the fan floor, whichever is higher, at 120 rpm/s.
 
 The daemon's own logic runs on the simulated hardware: Sampler (4 Hz/1 Hz
 windows, 1 Hz aggregate records, history, peaks), governor.step (states, cuts,
-recoveries, events), rapl.clamp_limits, config.validate and Daemon.build_status
-itself, so the status shape cannot drift from turbomacd's. In dynamic mode a
-GPU-loaded burst at the 40 W ceiling crosses the shed band and gets cut.
+recoveries, events), rapl.clamp_limits, config.validate, the FanController (on
+fake applesmc fan files) and Daemon.build_status itself, so the status shape
+cannot drift from turbomacd's. In dynamic mode a GPU-loaded burst at the 40 W
+ceiling crosses the shed band and gets cut.
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from typing import Any, Iterator
 from turbomac import __version__, config
 from turbomac.config import HARD_MAX_W
 from turbomac.daemon import governor
+from turbomac.daemon.fans import FanController
 from turbomac.daemon.main import Daemon
 from turbomac.daemon.rapl import clamp_limits
 from turbomac.daemon.sampler import EXTRA_SMC_KEYS, Sampler
@@ -65,6 +68,7 @@ class _Sim:
         self.pkg, self.input, self.pdtr = 6.0, 21.3, 21.3
         self.gpu_w, self.pkg_c, self.gpu_c = 7.02, 60.0, 52.0
         self.fan = [float(f[1]) for f in FANS]
+        self.fan_min = [f[1] for f in FANS]      # fan{N}_min: the floor the SMC curve respects
         self.gpu_mode, self.gpu_cap = "auto", 15.0
         self.load = 0.45
         self.mhz, self.busy = [800] * 8, [1.0] * 8
@@ -105,7 +109,7 @@ class _Sim:
         self.gpu_c = _lag(self.gpu_c, 45.0 + 1.0 * self.gpu_w, 15.0, dt) if self.gpu_mode != "off" else self.gpu_c
         frac = min(1.0, max(0.0, (self.pkg_c - 74.0) / 18.0))
         for i, (_, lo, hi) in enumerate(FANS):
-            want = lo + frac * (hi - lo)
+            want = max(lo + frac * (hi - lo), self.fan_min[i])
             self.fan[i] += max(-120 * dt, min(120 * dt, want - self.fan[i]))
         self.load = _lag(self.load, 8.0 if active else 0.4, 60.0, dt)
 
@@ -159,8 +163,29 @@ class _Sim:
                 for lab, base, src, gain in SMC_TEMPS}
 
     def fans(self) -> list[dict[str, Any]]:
-        return [{"label": lab, "rpm": int(rpm), "min": lo, "max": hi, "manual": 0}
-                for rpm, (lab, lo, hi) in zip(self.fan, FANS)]
+        return [{"label": lab, "rpm": int(rpm), "min": fmin, "max": hi, "manual": 0}
+                for rpm, fmin, (lab, lo, hi) in zip(self.fan, self.fan_min, FANS)]
+
+
+class _FanIO:
+    """Fake applesmc fan{N}_* files for the real FanController; the simulated SMC clamps fan{N}_min to min..max."""
+
+    def __init__(self, sim: _Sim) -> None:
+        self.sim = sim
+
+    def numbers(self) -> list[int]:
+        return [i + 1 for i in range(len(FANS))]
+
+    def read_int(self, n: int, attr: str) -> int | None:
+        return {"input": int(self.sim.fan[n - 1]), "min": self.sim.fan_min[n - 1], "max": FANS[n - 1][2]}.get(attr)
+
+    def read_text(self, n: int, attr: str) -> str | None:
+        return FANS[n - 1][0] if attr == "label" else None
+
+    def write_min(self, n: int, rpm: int) -> str | None:
+        _, lo, hi = FANS[n - 1]
+        self.sim.fan_min[n - 1] = min(max(int(rpm), lo), hi)
+        return None
 
 
 class _Gpu:
@@ -293,6 +318,8 @@ class MockBackend(SimBackend):
                                "'Journal stopped'", "incident_id": self.incident_list[0]["id"]}
         self._snapshot: dict[str, Any] | None = None
         self.emit("boot_check", **self.incident_check)
+        self.fanctl = FanController(None, self, io=_FanIO(self.sim), clock=self.wall)
+        self.fanctl.start(self.config["fan"])
         self.emit("started", version=__version__, mode=self.config["governor"]["mode"],
                   smc_keys=len(make_smc_keys()), firmware=self.firmware)
         self.gpu_result = {"ok": True, "mode": "auto", "reason": "auto applied",
@@ -341,12 +368,18 @@ class MockBackend(SimBackend):
                 self.last_write = {"ts": round(wall, 3), "why": a["reason"], "ok": True,
                                    "reason": "sysfs and MSR match", "pl1_w": pl1, "pl2_w": pl2}
                 self.emit("write", **self.last_write)
-        if slow:
-            self.sampler.aggregate(now, wall, self.config["governor"]["ceiling_w"], governor.summary(self.gov))
+        if slow:   # as in Daemon.tick: the fan step runs after the governor, before the log record
+            temp = ((sd.get("cpu") or {}).get("temps") or {}).get("pkg_c")
+            pkg = self.sampler.derived(now, self.config["governor"]["ceiling_w"])["pkg_median_1s"]
+            self.fanctl.tick(now, temp, pkg, self.config["fan"])
+            self.sampler.aggregate(now, wall, self.config["governor"]["ceiling_w"], governor.summary(self.gov),
+                                   fan=self.fanctl.log_record())
         self.ticks += 1
         self._snapshot = None
 
     def on_config(self, accepted: dict[str, Any]) -> None:
+        if any(k.startswith("fan.") for k in accepted):
+            self.fanctl.on_config(self.config["fan"])
         if "gpu.cap_w" in accepted:
             self.sim.gpu_cap = float(accepted["gpu.cap_w"])
         for k, v in accepted.items():

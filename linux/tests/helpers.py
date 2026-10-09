@@ -46,6 +46,25 @@ def add_amdgpu(root: str) -> tuple[str, str]:
     return dev, hw
 
 
+def add_applesmc_fans(root: str, mins: tuple[int, int] = (2160, 2000)) -> str:
+    """applesmc.768 with old-mac's two fans (min as given, hardware max 5927 / 5489). Returns the dir."""
+    base = os.path.join(root, "sys/devices/platform/applesmc.768")
+    for n, (label, mn, mx, rpm) in enumerate((("Left side", mins[0], 5927, 2161),
+                                               ("Right side", mins[1], 5489, 1999)), start=1):
+        for attr, v in {"label": label, "input": rpm, "min": mn, "max": mx, "manual": 0, "output": rpm}.items():
+            write(os.path.join(base, f"fan{n}_{attr}"), f"{v}\n")
+    return base
+
+
+def add_coretemp(root: str, pkg_c: float) -> str:
+    """coretemp hwmon with a package sensor at pkg_c. Returns the temp1_input path."""
+    hw = os.path.join(root, "sys/class/hwmon/hwmon3")
+    write(os.path.join(hw, "name"), "coretemp\n")
+    write(os.path.join(hw, "temp1_label"), "Package id 0\n")
+    write(os.path.join(hw, "temp1_input"), f"{int(pkg_c * 1000)}\n")
+    return os.path.join(hw, "temp1_input")
+
+
 def no_journal(args: list[str]) -> None:
     """Stub journalctl: never consult the host journal from tests (verdict 'unknown')."""
     return None

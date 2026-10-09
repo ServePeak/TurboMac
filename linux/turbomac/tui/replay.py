@@ -25,6 +25,10 @@ field stays None, which the TUI shows as "-"):
   limits                   sysfs = rec.sysfs_limits, msr = rec.msr_limits, firmware None, hard max 45 W
   msr, smc, smc_temps, fans, cpu   copied
   gpu                      rec.gpu + config_mode/cap_cfg_w from config, busy False, last_result
+  fan                      rec.fan (FanController.log_record: mode, target_rpm, reason, write_errors,
+                           per-fan min_written/hw_min lists) joined with rec.fans for label/rpm/max;
+                           last_change_ts None. Logs from before the fan floor have no rec.fan: mode
+                           "auto", target 0, min_written = hw_min = the logged fan*_min
   peaks                    max of input_max_w, pkg_w, a, gpu_w, pkg_c over the records played
   smc_ok, config_digest    rec.smc_valid, digest of the in-memory config
   incident_check           {"verdict": "unknown", "reason": "replay"}
@@ -199,10 +203,27 @@ class ReplayBackend(SimBackend):
             "limits": {"sysfs": lim or None, "msr": rec.get("msr_limits"), "firmware": None,
                        "hard_max_w": HARD_MAX_W},
             "msr": rec.get("msr"), "smc": rec.get("smc"), "smc_temps": rec.get("smc_temps"), "fans": rec.get("fans"),
-            "gpu": gpu, "cpu": rec.get("cpu"), "peaks": {k: dict(v) for k, v in self.peaks.items()},
+            "gpu": gpu, "fan": self.map_fan(rec), "cpu": rec.get("cpu"),
+            "peaks": {k: dict(v) for k, v in self.peaks.items()},
             "smc_ok": bool(rec.get("smc_valid")), "config_digest": config.digest(self.config),
             "incident_check": {"verdict": "unknown", "reason": "replay: no boot check"},
         }
+
+    @staticmethod
+    def map_fan(rec: dict[str, Any]) -> dict[str, Any]:
+        """rec.fan + rec.fans -> the shape of FanController.status() (see module doc)."""
+        fans = [f for f in rec.get("fans") or [] if isinstance(f, dict)]
+        fan = rec.get("fan")
+        if not isinstance(fan, dict):
+            return {"mode": "auto", "target_rpm": 0, "reason": "replay: no fan floor in this log",
+                    "fans": [{"label": f.get("label"), "rpm": f.get("rpm"), "min_written": f.get("min"),
+                              "hw_min": f.get("min"), "max": f.get("max")} for f in fans],
+                    "last_change_ts": None, "write_errors": 0}
+        mw, hw = fan.get("min_written") or [], fan.get("hw_min") or []
+        return {"mode": fan.get("mode"), "target_rpm": fan.get("target_rpm"), "reason": fan.get("reason"),
+                "fans": [{"label": f.get("label"), "rpm": f.get("rpm"), "min_written": mw[i] if i < len(mw) else None,
+                          "hw_min": hw[i] if i < len(hw) else None, "max": f.get("max")} for i, f in enumerate(fans)],
+                "last_change_ts": None, "write_errors": fan.get("write_errors", 0)}
 
     def history(self, seconds: float = 600, full: bool = False) -> list[dict[str, Any]]:
         n = max(0, min(int(seconds), HISTORY_LEN))

@@ -16,7 +16,7 @@ from turbomac.tui.fmt import DASH, DIM
 from turbomac.tui.widgets import ConfirmScreen, GpuOffScreen
 
 NULL = "__null__"
-GROUPS = ("governor", "gpu", "cpu", "logging")
+GROUPS = ("governor", "gpu", "fan", "cpu", "logging")
 MEANING = {
     "governor.mode": "off = telemetry only · static = PL1 = PL2 = static cap · dynamic = trim on measured input",
     "governor.static_cap_w": "boot and fallback cap; Intel's cTDP-down level for this part",
@@ -32,6 +32,18 @@ MEANING = {
     "governor.stale_timeout_s": "no valid SMC sample for this long ⇒ FALLBACK to the static cap",
     "gpu.mode": "auto = power1_cap at gpu.cap_w · low = 10 W, DPM low · off = switcheroo power-off (gated)",
     "gpu.cap_w": "dGPU power1_cap in auto mode",
+    "fan.mode": "floor = raise fan*_min ahead of the SMC curve · auto = never write, SMC curve only",
+    "fan.power_floor_w": "1 s package median at or above this ⇒ floor at least power_floor_rpm (releases 5 W lower)",
+    "fan.power_floor_rpm": "floor while the power rule is engaged",
+    "fan.t1_c": "package °C that engages ladder step 1",
+    "fan.t1_rpm": "floor at step 1",
+    "fan.t2_c": "package °C that engages ladder step 2",
+    "fan.t2_rpm": "floor at step 2",
+    "fan.t3_c": "package °C that engages ladder step 3",
+    "fan.t3_rpm": "floor at step 3",
+    "fan.hysteresis_c": "a step releases only below its threshold minus this",
+    "fan.step_down_interval_s": "time below the release threshold before the floor steps down one step",
+    "fan.max_rpm": "upper clamp for any floor; each fan is also clamped to its own fan*_max",
     "cpu.no_turbo": "intel_pstate no_turbo; – leaves the kernel value alone",
     "cpu.epp": "energy-performance preference for every CPU; – leaves it alone",
     "cpu.max_perf_pct": "intel_pstate max_perf_pct; empty leaves it alone",
@@ -42,7 +54,7 @@ MEANING = {
 
 def unit_for(key: str) -> str:
     for suffix, unit in (("_w", "W"), ("_s", "s"), ("_days", "d"), ("_mib", "MiB"), ("_pct", "%"),
-                         ("_ratio", "× ACPW")):
+                         ("_ratio", "× ACPW"), ("_rpm", "rpm"), ("_c", "°C")):
         if key.endswith(suffix):
             return unit
     return ""

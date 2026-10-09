@@ -1,4 +1,4 @@
-"""turbomacd entry point: wires sampler, governor, logger, GPU control and the socket."""
+"""turbomacd entry point: wires sampler, governor, logger, GPU and fan control and the socket."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,7 @@ from turbomac import __version__, config
 from turbomac.config import HARD_MAX_W
 from turbomac.daemon import governor, incidents
 from turbomac.daemon.cpu import CpuReader
+from turbomac.daemon.fans import FanController
 from turbomac.daemon.gpu import Gpu
 from turbomac.daemon.logger import EventLog, SampleLogger
 from turbomac.daemon.msr import Msr
@@ -77,6 +78,7 @@ class Daemon:
         self.gpu_thread: threading.Thread | None = None
         self.gpu_retry_left = 0               # > 0 while the startup GPU apply is being retried
         self.gpu_retry_next: float | None = None
+        self.fanctl: FanController | None = None
 
     # setup -------------------------------------------------------------------
     def setup(self, start_server: bool = True) -> None:
@@ -105,6 +107,12 @@ class Daemon:
             self.events.emit("cpu_setting", message=msg)
         self.gpu_thread = threading.Thread(target=self._apply_gpu_from_config, name="gpu-start", daemon=True)
         self.gpu_thread.start()
+        try:
+            self.fanctl = FanController(p, self.events)
+            self.fanctl.start(self.config["fan"])
+        except Exception as exc:  # noqa: BLE001 - fan trouble must never stop the governor
+            self.fanctl = None
+            self.events.emit("fan_error", error=repr(exc))
         if start_server:
             self.server = ControlServer(p.socket, self.dispatch)
             self.server.start()
@@ -155,17 +163,19 @@ class Daemon:
             self._errors[typ] = (repr(exc), now)
 
     def tick(self, now: float, slow: bool) -> None:
-        """One 250 ms step. Telemetry, logging and status errors never skip governor.step."""
+        """One 250 ms step. Telemetry, fan, logging and status errors never skip governor.step."""
         wall = time.time()
         try:
             self.sampler.fast(now, wall)
         except Exception as exc:  # noqa: BLE001 - an unreadable sample is invalid, never stale-valid
             self.sampler.latest = {"ts": wall, "mono": now, "valid": False}
             self._error("sample_error", exc, now)
+        fresh = slow
         if slow:
             try:
                 self.sampler.slow(now, wall)
             except Exception as exc:  # noqa: BLE001
+                fresh = False
                 self._error("slow_sample_error", exc, now)
         cfg = self.config
         sample = self.sampler.gov_input(now)
@@ -174,9 +184,12 @@ class Daemon:
         for a in actions:
             self.apply(a)
         self.last_step_ok = now
+        if slow:   # after the governor: an SMC fan write can never delay a power-limit decision
+            self._fan_step(now, fresh)
         if slow and self.logger is not None:
             try:
-                rec = self.sampler.aggregate(now, wall, cfg["governor"]["ceiling_w"], governor.summary(self.gov))
+                rec = self.sampler.aggregate(now, wall, cfg["governor"]["ceiling_w"], governor.summary(self.gov),
+                                             fan=self.fanctl.log_record() if self.fanctl is not None else None)
                 self.logger.write(rec)
             except Exception as exc:  # noqa: BLE001
                 self._error("log_error", exc, now)
@@ -185,6 +198,18 @@ class Daemon:
             self.status_snapshot = self.build_status(now)
         except Exception as exc:  # noqa: BLE001
             self._error("status_error", exc, now)
+
+    def _fan_step(self, now: float, fresh: bool) -> None:
+        """1 Hz fan floor: package °C (only from this tick's slow sample) and the 1 s package median."""
+        if self.fanctl is None:
+            return
+        try:
+            cfg = self.config
+            temps = ((self.sampler.slow_data.get("cpu") or {}).get("temps") or {}) if fresh else {}
+            pkg = self.sampler.derived(now, cfg["governor"]["ceiling_w"])["pkg_median_1s"]
+            self.fanctl.tick(now, temps.get("pkg_c"), pkg, cfg["fan"])
+        except Exception as exc:  # noqa: BLE001 - never skips the governor step
+            self._error("fan_error", exc, now)
 
     def apply(self, action: dict[str, Any]) -> None:
         if action["op"] == "event":
@@ -247,6 +272,11 @@ class Daemon:
             self.logger.close()
         if getattr(self, "smc", None) is not None:
             self.smc.restore()
+        if self.fanctl is not None:
+            try:
+                self.fanctl.restore()
+            except Exception as exc:  # noqa: BLE001
+                self.events.emit("fan_restore_failed", error=repr(exc))
         try:
             incidents.mark_clean(self.paths)
         except OSError as exc:
@@ -272,6 +302,9 @@ class Daemon:
             "msr": sd.get("msr"), "smc": sd.get("smc"), "smc_temps": sd.get("smc_temps"), "fans": sd.get("fans"),
             "gpu": {**(sd.get("gpu") or {}), "config_mode": cfg["gpu"]["mode"], "cap_cfg_w": cfg["gpu"]["cap_w"],
                     "busy": self.gpu.busy, "last_result": self.gpu_result},
+            "fan": self.fanctl.status() if self.fanctl is not None else {
+                "mode": cfg["fan"]["mode"], "target_rpm": 0, "reason": "fan controller unavailable", "fans": [],
+                "last_change_ts": None, "write_errors": 0},
             "cpu": sd.get("cpu"), "peaks": dict(self.sampler.peaks),
             "smc_ok": bool(self.smc and self.smc.ok), "config_digest": config.digest(cfg),
             "incident_check": self.incident_check,
@@ -340,6 +373,8 @@ class Daemon:
         if any(k.startswith("logging.") for k in accepted) and self.logger is not None:
             self.logger.retention_days = self.config["logging"]["retention_days"]
             self.logger.max_mib = self.config["logging"]["max_mib"]
+        if any(k.startswith("fan.") for k in accepted) and self.fanctl is not None:
+            self.fanctl.on_config(self.config["fan"])   # auto restores now; the rest applies on the next 1 Hz tick
         if "gpu.cap_w" in accepted and self.config["gpu"]["mode"] == "auto" and not self.gpu.busy:
             self.gpu_thread = threading.Thread(target=self._apply_gpu_from_config, daemon=True)
             self.gpu_thread.start()

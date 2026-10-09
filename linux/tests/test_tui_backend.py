@@ -11,7 +11,7 @@ import helpers
 
 HAVE_TEXTUAL = importlib.util.find_spec("textual") is not None
 FIXTURE = os.path.join(helpers.ROOT, "fixtures", "samples-oldmac-20261009.jsonl.gz")
-NESTED = ("latest", "derived", "governor", "limits", "gpu", "cpu")
+NESTED = ("latest", "derived", "governor", "limits", "gpu", "fan", "cpu")
 
 
 def daemon_status():
@@ -50,6 +50,8 @@ class ShapeTest(unittest.TestCase):
                 self.assertLessEqual(want - {"mode"} if sec == "gpu" else want, got, sec)
         self.assertEqual(set(st["thresholds"]), {"shed_w", "emergency_w", "recover_w"})
         self.assertEqual(set(st["governor"]["counters"]), set(self.ref["governor"]["counters"]))
+        fan_keys = {"label", "rpm", "min_written", "hw_min", "max"}
+        self.assertTrue(st["fan"]["fans"] and all(set(f) == fan_keys for f in st["fan"]["fans"]))
 
     def test_mock_status_has_every_build_status_key(self):
         from turbomac.tui.mock import MockBackend
@@ -84,6 +86,14 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(st["limits"]["sysfs"], rec["sysfs_limits"])
         self.assertEqual(st["fans"], rec["fans"])
         self.assertEqual(st["gpu"]["config_mode"], "auto")
+        self.assertNotIn("fan", rec)                                  # logged before the fan floor existed
+        self.assertEqual((st["fan"]["mode"], st["fan"]["target_rpm"]), ("auto", 0))
+        self.assertEqual(st["fan"]["fans"][1]["hw_min"], rec["fans"][1]["min"])
+        rec2 = dict(rec, fan={"mode": "floor", "target_rpm": 5500, "reason": "pkg 93 °C ≥ 92 °C",
+                              "min_written": [5500, 5489], "hw_min": [2160, 2000], "write_errors": 0})
+        fan = self.r.map_fan(rec2)
+        self.assertEqual((fan["mode"], fan["target_rpm"], fan["fans"][1]["min_written"], fan["fans"][1]["label"]),
+                         ("floor", 5500, 5489, rec["fans"][1]["label"]))
 
     def test_plays_at_speed_keeps_history_and_loops_forward(self):
         self.r.advance(300)
@@ -155,6 +165,26 @@ class MockTest(unittest.TestCase):
         self.assertEqual(r["accepted"]["governor.mode"], "static")
         m.advance(1)
         self.assertEqual(m.status()["governor"]["state"], "STATIC")
+
+    def test_fan_floor_ramps_the_fans_during_bursts(self):
+        m = self.Mock(seed=1, warmup_s=25)                # idle, 5 s before the first burst
+        st = m.status()
+        self.assertEqual((st["fan"]["mode"], st["fan"]["target_rpm"]), ("floor", 0))
+        self.assertEqual([f["rpm"] for f in st["fans"]], [2160, 2000])
+        m.advance(25)                                     # 20 s into the burst (package at PL1 = 35 W)
+        st = m.status()
+        self.assertEqual(st["fan"]["target_rpm"], 3500)
+        self.assertTrue(st["fan"]["reason"].startswith(("power", "pkg")), st["fan"]["reason"])
+        self.assertTrue(all(f["rpm"] >= 3400 and f["min"] == 3500 for f in st["fans"]), st["fans"])
+        self.assertIn("fan_floor", {e["type"] for e in m.events(1000)})
+        self.assertEqual(m.history(5, full=True)[-1]["fan"]["target_rpm"], 3500)
+        res = m.config_set({"fan.mode": "auto"})
+        self.assertEqual(res["accepted"], {"fan.mode": "auto"})
+        self.assertEqual(m.sim.fan_min, [2160, 2000])     # restored at once
+        m.advance(10)
+        st = m.status()
+        self.assertEqual((st["fan"]["mode"], st["fan"]["target_rpm"], m.sim.fan_min), ("auto", 0, [2160, 2000]))
+        self.assertIn("fan.t1_c", m.config_set({"fan.t1_c": 90})["rejected"])   # t1 must stay below t2 (84)
 
     def test_gpu_modes_change_what_is_reported(self):
         m = self.Mock(seed=2, warmup_s=10, gpu_delay_s=0)

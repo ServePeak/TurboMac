@@ -142,8 +142,9 @@ class Sampler:
                 "input_mean_1s": self.w["input"].mean(now, 1.0),
                 "acpw_w": self.w["acpw"].median(now, 10.0)}
 
-    def aggregate(self, now: float, wall: float, ceiling_w: float, gov: dict[str, Any]) -> dict[str, Any]:
-        """The 1 Hz record: logged as one JSONL line and kept in the 600 s ring."""
+    def aggregate(self, now: float, wall: float, ceiling_w: float, gov: dict[str, Any],
+                  fan: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The 1 Hz record: logged as one JSONL line and kept in the 600 s ring. fan: FanController.log_record()."""
         d = self.derived(now, ceiling_w)
         sd = self.slow_data
         gpu = sd.get("gpu") or {}
@@ -162,6 +163,8 @@ class Sampler:
         rec.update({k: sd.get(k) for k in ("smc", "msr", "msr_limits", "smc_temps", "fans", "gpu", "cpu")})
         lim = sd.get("limits") or {}
         rec["sysfs_limits"] = {"pl1_w": lim.get("pl1_w"), "pl2_w": lim.get("pl2_w"), "enabled": lim.get("enabled")}
+        if fan is not None:
+            rec["fan"] = fan
         with self.hist_lock:
             self.history.append(rec)
         return rec

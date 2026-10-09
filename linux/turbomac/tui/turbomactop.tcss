@@ -38,7 +38,7 @@ Dashboard { height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
 #row-b { height: 12; }
 #temps-panel { width: 1fr; height: 12; }
 #fans-col { width: 30; height: 12; }
-#fans-panel { height: 6; }
+#fans-panel { height: 7; border-subtitle-align: left; border-subtitle-color: #6e7681; }
 #rails-panel { height: 5; }
 #top-panel { width: 26; height: 12; }
 #temps-panel-narrow { height: 12; }

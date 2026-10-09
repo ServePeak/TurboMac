@@ -237,12 +237,16 @@ class TurboMacTop(App[None]):
             self.load_initial() if self.smc_keys is None else self.refresh_history()
         self.query_one("#banner").show(self.status)  # type: ignore[attr-defined]
 
+    # Interval timers can still fire while the app tears its widgets down: query(), not query_one().
     def tick(self) -> None:
-        self.query_one(HeaderBar).refresh()
+        for bar in self.query(HeaderBar):
+            bar.refresh()
 
     def poll_log(self) -> None:
-        if self.query_one(TabbedContent).active == "log":
-            self.query_one(LogView).poll()
+        tabs = self.query(TabbedContent)
+        if tabs and tabs.first().active == "log":
+            for view in self.query(LogView):
+                view.poll()
 
     # layout and actions -----------------------------------------------------------
     def apply_layout(self, width: int) -> None:

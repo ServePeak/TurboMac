@@ -23,6 +23,12 @@ DEFAULTS: dict[str, Any] = {
         "stale_timeout_s": 2,
     },
     "gpu": {"mode": "auto", "cap_w": 15},
+    "fan": {
+        "mode": "floor",
+        "power_floor_w": 25, "power_floor_rpm": 3500,
+        "t1_c": 78, "t1_rpm": 3500, "t2_c": 84, "t2_rpm": 4500, "t3_c": 90, "t3_rpm": 5500,
+        "hysteresis_c": 6, "step_down_interval_s": 20, "max_rpm": 5500,
+    },
     "cpu": {"no_turbo": None, "epp": None, "max_perf_pct": None},
     "logging": {"retention_days": 14, "max_mib": 1024},
 }
@@ -43,6 +49,18 @@ SPEC: dict[str, tuple[str, Any]] = {
     "governor.stale_timeout_s": ("num", (1, 10)),
     "gpu.mode": ("choice", ("auto", "low", "off")),
     "gpu.cap_w": ("num", (5, 35)),
+    "fan.mode": ("choice", ("auto", "floor")),
+    "fan.power_floor_w": ("num", (10, 45)),
+    "fan.power_floor_rpm": ("int", (2000, 5900)),
+    "fan.t1_c": ("num", (50, 99)),
+    "fan.t1_rpm": ("int", (2000, 5900)),
+    "fan.t2_c": ("num", (50, 99)),
+    "fan.t2_rpm": ("int", (2000, 5900)),
+    "fan.t3_c": ("num", (50, 99)),
+    "fan.t3_rpm": ("int", (2000, 5900)),
+    "fan.hysteresis_c": ("num", (2, 15)),
+    "fan.step_down_interval_s": ("num", (5, 120)),
+    "fan.max_rpm": ("int", (2500, 5900)),
     "cpu.no_turbo": ("bool?", None),
     "cpu.epp": ("choice?", EPP_CHOICES),
     "cpu.max_perf_pct": ("int?", (20, 100)),
@@ -61,6 +79,10 @@ CROSS_RULES = [
     (("governor.emergency_ratio", "governor.shed_ratio"),
      lambda c: c["governor.emergency_ratio"] >= c["governor.shed_ratio"] + 0.03 - _EPS,
      "emergency_ratio must be >= shed_ratio + 0.03"),
+    (("fan.t1_c", "fan.t2_c"), lambda c: c["fan.t1_c"] < c["fan.t2_c"] - _EPS, "t1_c must be < t2_c"),
+    (("fan.t2_c", "fan.t3_c"), lambda c: c["fan.t2_c"] < c["fan.t3_c"] - _EPS, "t2_c must be < t3_c"),
+    (("fan.t1_rpm", "fan.t2_rpm"), lambda c: c["fan.t1_rpm"] <= c["fan.t2_rpm"], "t1_rpm must be <= t2_rpm"),
+    (("fan.t2_rpm", "fan.t3_rpm"), lambda c: c["fan.t2_rpm"] <= c["fan.t3_rpm"], "t2_rpm must be <= t3_rpm"),
 ]
 
 

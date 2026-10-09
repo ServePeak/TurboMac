@@ -1,6 +1,6 @@
 #!/bin/sh
 # TurboMac rollback: stop and disable the units, unmask thermald, restore the
-# captured firmware RAPL limits and GPU defaults. Logs, incidents and config are kept.
+# captured firmware RAPL limits, GPU defaults and fan minimums. Logs, incidents and config are kept.
 # Usage: sudo sh deploy/rollback.sh [--purge]
 #   --purge  also remove /etc/modules-load.d/turbomac.conf, /etc/sysusers.d/turbomac.conf,
 #            the /usr/local/bin symlinks, the turbomac group and the TUI venv /opt/turbomac/venv
@@ -17,6 +17,7 @@ done
 RAPL=/sys/class/powercap/intel-rapl:0
 FW=/var/lib/turbomac/firmware-limits.json
 SW=/sys/kernel/debug/vgaswitcheroo/switch
+FANDEF=/var/lib/turbomac/fan-defaults.json
 
 echo "== stopping units"
 # Stopping turbomacd re-applies the static cap (ExecStopPost); firmware limits are restored below.
@@ -60,6 +61,38 @@ for dev in /sys/class/drm/card*/device; do
     done
     echo auto > "$dev/power_dpm_force_performance_level" && echo "dpm level auto"
 done
+
+echo "== fans"
+# A clean daemon stop already restores the fan minimums; this also covers a crash that left a floor.
+# fan-defaults.json holds the fan*_min values captured before the daemon ever wrote a floor. Fallback when
+# it is missing, or for an entry that is missing or implausible (more than 500 rpm above the hardware
+# minimum): the verified hardware minimums of this machine, fan1 2160 rpm and fan2 2000 rpm.
+# Only fan*_min is written; fan*_manual and fan*_output are never touched.
+SMCDIR=$(ls -d /sys/devices/platform/applesmc.* 2>/dev/null | head -n 1)
+if [ -n "$SMCDIR" ]; then
+    FANVALS=$(/usr/bin/python3 -c 'import json,sys
+known = {1: 2160, 2: 2000}
+try:
+    saved = json.load(open(sys.argv[1]))["fans"]
+except Exception:
+    saved = {}
+out = dict(known)
+for k, v in (saved.items() if isinstance(saved, dict) else ()):
+    m = v.get("min") if isinstance(v, dict) else None
+    if k.isdigit() and type(m) is int and 0 < m <= known.get(int(k), m) + 500:
+        out[int(k)] = m
+print(" ".join("%d=%d" % kv for kv in sorted(out.items())))' "$FANDEF" 2>/dev/null)
+    [ -n "$FANVALS" ] || FANVALS="1=2160 2=2000"
+    [ -f "$FANDEF" ] || echo "NOTE: $FANDEF missing; using the verified hardware minimums 2160 / 2000 rpm"
+    for kv in $FANVALS; do
+        n=${kv%=*}
+        rpm=${kv#*=}
+        [ -f "$SMCDIR/fan${n}_min" ] || continue
+        echo "$rpm" > "$SMCDIR/fan${n}_min" && echo "fan${n}_min=$(cat "$SMCDIR/fan${n}_min")"
+    done
+else
+    echo "applesmc not found; fans left alone"
+fi
 
 if [ "$PURGE" -eq 1 ]; then
     echo "== purge"

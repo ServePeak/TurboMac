@@ -7,7 +7,7 @@ and rationale: [PLAN.md](PLAN.md).
 | Piece | What it does |
 |---|---|
 | `turbomac-cap.service` | early boot, shell + minimal Python: PL1 = PL2 = static cap, GPU mode/cap, readback |
-| `turbomacd` | root daemon: samples at 4 Hz, logs 1 Hz JSONL, runs the governor, owns the GPU mode, serves `/run/turbomac/turbomacd.sock` |
+| `turbomacd` | root daemon: samples at 4 Hz, logs 1 Hz JSONL, runs the governor, owns the GPU mode and the fan floor, serves `/run/turbomac/turbomacd.sock` |
 | `turbomacctl` | CLI over the socket, for users in group `turbomac` |
 | `turbomactop` | full-screen TUI over the socket (Textual, own venv): dashboard, settings, GPU mode, incidents, event log |
 
@@ -116,6 +116,60 @@ daemon's startup GPU apply fails with "amdgpu device not found" or "amdgpu
 hwmon not found", the control loop retries it every 15 s, up to 12 times
 (`gpu_retry`, `gpu_retry_succeeded`, `gpu_retry_gave_up` events).
 
+## Fan floor
+
+What: the daemon raises applesmc's `fan1_min` / `fan2_min` (the floor the SMC's
+own fan curve respects) when the CPU is working hard, and lowers it again when
+it cools down. The SMC stays in automatic control; TurboMac never writes
+`fan*_manual` or `fan*_output`.
+
+Why: the SMC curve lags the load by 20-30 s. In the Phase 3 runs a sustained
+40 W package reached the CPU's 97-100 °C limit in about 30 s while the fans were
+still at ~3,900 of 5,927 rpm (`receipts/phase3-20261010/README.md`), so the
+hardware throttled. The floor spins the fans up as soon as the power arrives.
+
+How (once a second, from the daemon's 1 Hz tick, after the governor step):
+
+- power rule: 1 s median package power ≥ `fan.power_floor_w` (25 W) ⇒ at least
+  `fan.power_floor_rpm` (3500 rpm), engaged immediately;
+- temperature ladder on the coretemp package sensor: ≥ `t1_c` 78 °C ⇒ 3500 rpm,
+  ≥ `t2_c` 86 °C ⇒ 4500 rpm, ≥ `t3_c` 92 °C ⇒ 5500 rpm, stepping up immediately;
+- floor = the higher of the two, at most `fan.max_rpm` (5500 rpm) and each fan's
+  own `fan*_max` (the right fan tops out at 5489 rpm), never below the captured
+  hardware minimum;
+- release is slow: a rule lets go only after its input has been below
+  threshold − hysteresis (`fan.hysteresis_c` 6 °C for a ladder step, 5 W for the
+  power rule) continuously for `fan.step_down_interval_s` (20 s), and the ladder
+  steps down one step per interval;
+- a missing temperature or power reading makes that rule contribute nothing
+  (both missing ⇒ no floor; the SMC curve still runs).
+
+`fan*_min` is written only when the per-fan value changes, then read back
+(±50 rpm); events `fan_floor`, `fan_floor_error` (a failed value is retried at
+most every 30 s), `fan_restore`, `fan_mode`. The hardware minimums are captured
+once, before the first floor is written, into `/var/lib/turbomac/fan-defaults.json`
+(same idea as `firmware-limits.json`). If a start finds a floor already applied
+(more than 500 rpm above the known 2160 / 2000 rpm), nothing is saved and the
+known minimums are used until a later start captures plausible values.
+
+A clean daemon stop writes the hardware minimums back; a crash leaves the floor
+in place (more cooling, the safe side) until the daemon starts again. Status:
+`turbomacctl status` (fans line: `floor 3500 rpm (power 31 W ≥ 25 W)` or
+`floor off`), `turbomacctl watch` (` fan 3500` while a floor is active), the
+FANS panel in `turbomactop` (target, with the reason in the panel's bottom
+border), and the `fan` field of every sample-log line.
+
+```sh
+turbomacctl config fan.mode=auto        # disable: restores the hardware minimums now, SMC curve only
+turbomacctl config fan.mode=floor       # enable again (the default)
+turbomacctl config fan.t1_c=80 fan.power_floor_rpm=3000
+```
+
+Bounds: `power_floor_w` 10-45 W, every `*_rpm` 2000-5900 (`max_rpm` 2500-5900),
+`t*_c` 50-99 °C with `t1_c < t2_c < t3_c` and `t1_rpm ≤ t2_rpm ≤ t3_rpm`,
+`hysteresis_c` 2-15, `step_down_interval_s` 5-120. A `fan.*` change applies on
+the next 1 Hz tick; switching to `auto` restores immediately.
+
 ## turbomactop
 
 A bpytop-style cockpit for the daemon. It runs unprivileged (any user in group
@@ -159,7 +213,7 @@ python3 -m venv .venv-tui && .venv-tui/bin/pip install -r requirements-tui.txt
 
 | Screen | Key | What |
 |---|---|---|
-| Dashboard | `1` | input gauge against ACPW with recover/shed/emergency markers and the input predicted for the current PL1; V x A and inferred PD contract; 60 s and 10 min sparklines (input, package, GPU, package temp); CPU (RAPL domains, PL1/PL2 as sysfs and MSR see them, power-limited/thermal/PROCHOT, per-core GHz and busy); GPU; governor (state, time in state, PL1 to ceiling, counters, non-CPU estimate, last action, fallback reason); all temperatures; fans; SMC rails; top processes; session peaks; a banner when the previous boot ended abruptly |
+| Dashboard | `1` | input gauge against ACPW with recover/shed/emergency markers and the input predicted for the current PL1; V x A and inferred PD contract; 60 s and 10 min sparklines (input, package, GPU, package temp); CPU (RAPL domains, PL1/PL2 as sysfs and MSR see them, power-limited/thermal/PROCHOT, per-core GHz and busy); GPU; governor (state, time in state, PL1 to ceiling, counters, non-CPU estimate, last action, fallback reason); all temperatures; fans against their hardware range, the fan floor target and its reason; SMC rails; top processes; session peaks; a banner when the previous boot ended abruptly |
 | Settings | `2` | every config key with its value, default, bounds and meaning; edit and press `Enter` (selects apply when chosen); turbomacd's verdict shows inline (`REJECTED: ...` with the reason); `d` resets to defaults after a y/n; live preview of ceiling to predicted input and the bands at the live ACPW; config digest, persisted state, last change time |
 | GPU | `3` | auto / low / off, current draw, cap, DPM level, runtime status, PCI power state, switcheroo, panel owner, the steps of the last mode change. `off` (here or in Settings) opens a dialog that only proceeds when you type `OFF` |
 | Incidents | `4` | abrupt boots; the selected one shows input/package/GPU sparklines of its last 60 s, the last values, top processes and the journal tail |
@@ -184,7 +238,10 @@ sudo sh /opt/turbomac/src/deploy/rollback.sh
 Stops and disables both units, unmasks and starts `thermald`, restores the
 captured firmware limits (100 W / 125 W on this machine; a suspect or invalid
 capture is ignored in favour of those), powers the dGPU back on if needed and
-restores its cap to max with DPM `auto`. Kept: logs, incidents, config, the
+restores its cap to max with DPM `auto`, and writes the fan minimums back from
+`/var/lib/turbomac/fan-defaults.json` (when that file is missing, or an entry is
+missing or more than 500 rpm above the hardware minimum, it falls back to the
+verified hardware minimums 2160 rpm for fan1 and 2000 rpm for fan2). Kept: logs, incidents, config, the
 disabled unit files and `/opt/turbomac`, plus `/etc/modules-load.d/turbomac.conf`,
 `/etc/sysusers.d/turbomac.conf`, the `/usr/local/bin` symlinks and group
 `turbomac`. `rollback.sh --purge` also removes those last four, and the TUI venv
@@ -215,6 +272,8 @@ restores every hardware default.
   (`journalctl -u turbomacd -g TURBOMAC_EVENT`).
 - `/var/lib/turbomac/smc-keys.json`: SMC key table cache (rebuilt if the key
   count changes or a key moves).
+- `/var/lib/turbomac/fan-defaults.json`: the fans' hardware minimums, captured
+  once before the first fan floor (see Fan floor).
 
 ## Rules worth knowing
 
