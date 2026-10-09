@@ -144,6 +144,8 @@ class Gpu:
         """Apply auto/low/off. A failed off reverts to low. Returns the outcome."""
         steps: list[str] = []
         with self.lock:
+            if not self.dev or not self.hwmon:
+                self.find()   # amdgpu may have probed after we started (early boot)
             if mode == "off":
                 done: list[str] = []
                 res = self._apply_off(wait_s, sleep, steps, done)

@@ -48,9 +48,28 @@ by `turbomac-cap.service` at every boot.
 | Headroom at idle | ~57 W | ~68 W |
 
 The internal panel stays black until a reboot or `turbomacctl gpu auto`
-(switcheroo `ON` + `DIS`, fbcon rebound). Not yet exercised: the GPU-off step at
-early boot (`turbomac-cap.sh apply` before getty); a deliberate reboot would
-confirm it along with the boot-time cap and the clean-shutdown bookkeeping.
+(switcheroo `ON` + `DIS`, fbcon rebound).
+
+## Reboot test (22:40 UTC, owner watching)
+
+`systemctl reboot`; SSH back after 46 s. Boot timeline (kernel-monotonic):
+
+| t | Event |
+|---|---|
+| 9.22 s | `turbomac-cap.service` starts |
+| 9.36 s | PL1 = PL2 = 35 W written and verified in sysfs and MSR 0x610 (firmware 100/125 recorded) |
+| 9.37 s | GPU `off` step FAILS: the vga_switcheroo debugfs entry and amdgpu are not up yet |
+| 9.76 s | `turbomacd` started; previous boot judged **clean** ("Journal stopped"); dynamic mode resumes from 35 W (TRIM) |
+| 11.05 s | user session (Hermes gateway) starts, already under the cap |
+| 14.03 s | Docker starts, already under the cap |
+| ~25 s | governor reaches 40 W (NORMAL); daemon's GPU retry succeeds: switcheroo `DIS Off`, PCI D3hot |
+
+All 19 containers and Hermes came back. Fix applied after the test and
+redeployed: "vga_switcheroo not available" is now an explicit retry trigger
+(it had matched only through the revert text), and `apply_mode` re-discovers
+the amdgpu device if it was absent at daemon start, so status shows the PCI
+power state after an early-boot retry. The Radeon is on for roughly the first
+25 s after boot; the CPU cap is in place from 9.4 s.
 
 ## Notes
 

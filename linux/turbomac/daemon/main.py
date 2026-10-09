@@ -27,7 +27,7 @@ WATCHDOG_EVERY_S = 2.0
 WATCHDOG_MAX_STEP_AGE_S = 5.0   # ping only if a governor step succeeded this recently
 GPU_RETRY_EVERY_S = 15.0
 GPU_RETRIES = 12
-GPU_RETRYABLE = ("amdgpu device not found", "amdgpu hwmon not found")
+GPU_RETRYABLE = ("amdgpu device not found", "amdgpu hwmon not found", "vga_switcheroo not available")
 
 
 def sd_notify(msg: str) -> bool:
