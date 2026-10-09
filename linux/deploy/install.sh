@@ -113,3 +113,22 @@ fi
 echo "== smoke test"
 sleep 2
 /usr/local/bin/turbomacctl status
+
+echo "== turbomactop (TUI venv, optional)"
+# The daemon never uses the venv; a TUI problem never fails the install.
+VENV="$PREFIX/venv"
+if "$PY" -c 'import ensurepip' 2>/dev/null; then
+    if { [ -x "$VENV/bin/pip" ] || "$PY" -m venv "$VENV"; } \
+        && PIP_ROOT_USER_ACTION=ignore PIP_DISABLE_PIP_VERSION_CHECK=1 \
+           "$VENV/bin/pip" install -q -r "$ROOT/requirements-tui.txt"; then
+        printf '#!/bin/sh\nPYTHONPATH=%s/src exec %s/bin/python -m turbomac.tui "$@"\n' "$PREFIX" "$VENV" \
+            > "$PREFIX/bin/turbomactop"
+        chmod 0755 "$PREFIX/bin/turbomactop"
+        ln -sf "$PREFIX/bin/turbomactop" /usr/local/bin/turbomactop
+        echo "turbomactop installed: run 'turbomactop' as $OWNER (group turbomac)"
+    else
+        echo "WARNING: TUI venv setup failed (network?); the daemon is unaffected. Re-run install.sh to retry."
+    fi
+else
+    echo "TUI skipped: run 'apt-get install -y python3-venv' and re-run install.sh"
+fi

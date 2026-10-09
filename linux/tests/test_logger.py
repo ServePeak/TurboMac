@@ -76,7 +76,7 @@ class LoggerTest(unittest.TestCase):
         self.assertEqual(self.read_ts(), [now + i * 0.001 for i in range(50)])
 
     def test_full_queue_drops_oldest_and_reports_once(self):
-        events, gate, now = [], threading.Event(), time.time()
+        events, gate, now = [], threading.Event(), 1_700_000_000.0  # fixed mid-hour base: no rotation during the test
         lg = SampleLogger(self.dir, on_event=lambda typ, **kw: events.append(typ))
         real = lg._write_now
 

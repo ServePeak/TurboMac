@@ -1,0 +1,104 @@
+/* turbomactop: dark, dense, fixed panel heights (no layout work per update). */
+Screen { background: #0b0e14; }
+#header { background: #161b26; color: #c0caf5; }
+
+#tabs { height: 1fr; }
+#tabs > ContentTabs { height: 1; background: #161b26; }
+#tabs Underline { display: none; }
+#tabs Tab { padding: 0 2; color: #7a8299; }
+#tabs Tab:hover { color: #c0caf5; }
+#tabs Tab.-active { background: #2a3352; color: #ffffff; text-style: bold; }
+#tabs > ContentSwitcher { height: 1fr; }
+TabPane { height: 1fr; padding: 0; }
+Footer { background: #161b26; }
+
+Panel {
+    border: round #3b4261;
+    border-title-color: #7aa2f7;
+    border-title-style: bold;
+    padding: 0 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* dashboard */
+Dashboard { height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
+#banner { height: 1; border: none; padding: 0; background: #2a1215; }
+#input-panel { height: 3; border: none; padding: 0; }
+#peaks-panel { height: 1; border: none; padding: 0; }
+#spark-head { height: 1; color: #7a8299; }
+#spark-head > .spark-label { width: 9; text-style: bold; }
+#spark-head > .spark-caption { width: 1fr; margin-right: 1; }
+#spark-head > .spark-stats { width: 28; }
+.dash-row { height: auto; }
+#row-a { height: 11; }
+#cpu-panel { width: 46; height: 11; }
+#gpu-panel { width: 1fr; height: 11; }
+#gov-panel { width: 38; height: 11; }
+#row-b { height: 12; }
+#temps-panel { width: 1fr; height: 12; }
+#fans-col { width: 30; height: 12; }
+#fans-panel { height: 6; }
+#rails-panel { height: 5; }
+#top-panel { width: 26; height: 12; }
+#temps-panel-narrow { height: 12; }
+
+.narrow-only { display: none; }
+#tabs.-narrow .narrow-only { display: block; }
+#tabs.-narrow .wide-only { display: none; }
+#tabs.-narrow #cpu-panel { width: 1fr; }
+#tabs.-narrow #gov-panel { width: 1fr; }
+#tabs.-narrow #row-b { height: 11; }
+#tabs.-narrow #gpu-panel-narrow { width: 1fr; height: 11; }
+#tabs.-narrow #fans-col { height: 11; }
+
+/* settings */
+SettingsView { padding: 0 1; }
+#cfg-badge { height: 1; }
+#cfg-preview { height: 2; background: #121826; }
+#cfg-rows { height: 1fr; scrollbar-size-vertical: 1; }
+.set-group { height: 1; margin-top: 1; color: #7aa2f7; text-style: bold; }
+SettingRow { height: 2; }
+.set-line { height: 1; }
+.set-key { width: 29; }
+.set-editor { width: 22; margin-right: 1; }
+.set-info { width: 48; }
+#tabs.-narrow .set-info { display: none; }
+.set-result { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
+.set-meaning { height: 1; padding-left: 2; text-wrap: nowrap; text-overflow: ellipsis; }
+
+/* gpu */
+GpuView { padding: 1 2; }
+#gpu-intro { height: auto; margin-bottom: 1; }
+#gpu-top { height: auto; }
+#gpu-modes { width: 44; height: auto; margin-right: 2; }
+#gpu-state { width: 1fr; height: 9; border: round #3b4261; border-title-color: #7aa2f7; padding: 0 1; }
+#gpu-progress { height: auto; margin-top: 1; }
+#gpu-steps { height: auto; margin-top: 1; }
+
+/* incidents */
+IncidentsView { padding: 0 1; }
+#inc-head { height: 1; }
+#inc-table { height: auto; max-height: 8; }
+#inc-detail { height: 1fr; scrollbar-size-vertical: 1; }
+#inc-title { height: auto; margin: 1 0 0 0; }
+#inc-last, #inc-top { height: auto; }
+#inc-journal { height: auto; margin-top: 1; }
+
+/* log */
+LogView { padding: 0 1; }
+#log-bar { height: 1; }
+#log-filter { width: 1fr; margin-right: 1; }
+#log-type { width: 26; margin-right: 1; }
+#log-count { width: 36; }
+#log-view { height: 1fr; background: #0f131c; }
+
+/* dialogs */
+ConfirmScreen, GpuOffScreen, HelpScreen { align: center middle; background: #000000 60%; }
+.dialog { width: 80; height: auto; background: #161b26; border: thick #f7768e; padding: 1 2; }
+#help-dialog { width: 90; border: round #7aa2f7; }
+.dialog-text { height: auto; }
+#gpu-off-input { margin-top: 1; }
+#gpu-off-error { height: 1; }
+.dialog-buttons { height: auto; margin-top: 1; align-horizontal: right; }
+.dialog-buttons Button { margin-left: 2; }

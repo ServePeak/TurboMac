@@ -3,7 +3,7 @@
 # captured firmware RAPL limits and GPU defaults. Logs, incidents and config are kept.
 # Usage: sudo sh deploy/rollback.sh [--purge]
 #   --purge  also remove /etc/modules-load.d/turbomac.conf, /etc/sysusers.d/turbomac.conf,
-#            the /usr/local/bin symlinks and the turbomac group
+#            the /usr/local/bin symlinks, the turbomac group and the TUI venv /opt/turbomac/venv
 set -u
 PURGE=0
 for arg in "$@"; do
@@ -67,6 +67,9 @@ if [ "$PURGE" -eq 1 ]; then
           /usr/local/bin/turbomacctl /usr/local/bin/turbomacd
     if getent group turbomac >/dev/null; then
         groupdel turbomac && echo "group turbomac removed"
+    fi
+    if [ -d /opt/turbomac/venv ]; then
+        rm -rf /opt/turbomac/venv && echo "TUI venv /opt/turbomac/venv removed"
     fi
 fi
 

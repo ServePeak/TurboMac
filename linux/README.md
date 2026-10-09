@@ -9,9 +9,10 @@ and rationale: [PLAN.md](PLAN.md).
 | `turbomac-cap.service` | early boot, shell + minimal Python: PL1 = PL2 = static cap, GPU mode/cap, readback |
 | `turbomacd` | root daemon: samples at 4 Hz, logs 1 Hz JSONL, runs the governor, owns the GPU mode, serves `/run/turbomac/turbomacd.sock` |
 | `turbomacctl` | CLI over the socket, for users in group `turbomac` |
-| `turbomactop` | TUI, Phase 2 (not in this tree yet) |
+| `turbomactop` | full-screen TUI over the socket (Textual, own venv): dashboard, settings, GPU mode, incidents, event log |
 
 The daemon and CLI use only the Python standard library (Python 3.10+, 3.14 on old-mac).
+`turbomactop` needs Textual, pinned in `requirements-tui.txt` and installed into its own venv.
 
 ## Install
 
@@ -115,6 +116,65 @@ daemon's startup GPU apply fails with "amdgpu device not found" or "amdgpu
 hwmon not found", the control loop retries it every 15 s, up to 12 times
 (`gpu_retry`, `gpu_retry_succeeded`, `gpu_retry_gave_up` events).
 
+## turbomactop
+
+A bpytop-style cockpit for the daemon. It runs unprivileged (any user in group
+`turbomac`) and gets everything from the control socket: it never reads sysfs,
+the SMC selector or RAPL, and never writes anything except through
+`config.set`, `config.reset` and `gpu.set`.
+
+`install.sh` sets it up after the daemon smoke test: if `python3 -c 'import ensurepip'`
+works it creates `/opt/turbomac/venv`, installs `requirements-tui.txt` (Textual
+8.2.8, idempotent) and writes `/opt/turbomac/bin/turbomactop` (symlinked into
+`/usr/local/bin`). Without `python3-venv` it prints
+`TUI skipped: run 'apt-get install -y python3-venv' and re-run install.sh` and
+carries on; a failed pip install is a warning, never an install failure. The
+daemon never uses the venv. `rollback.sh --purge` removes it.
+
+```sh
+ssh -t old-mac turbomactop                      # live, as parham (log in again after install for the group)
+turbomactop --socket /run/turbomac/turbomacd.sock
+```
+
+On the Mac, without a daemon:
+
+```sh
+cd linux
+python3 -m venv .venv-tui && .venv-tui/bin/pip install -r requirements-tui.txt
+.venv-tui/bin/python -m turbomac.tui --mock [--seed N]
+.venv-tui/bin/python -m turbomac.tui --replay fixtures/samples-oldmac-20261009.jsonl.gz [--speed 10]
+```
+
+- `--mock`: a deterministic simulation of old-mac (seeded). Idle is about 21 W
+  input / 6 W package / 7 W GPU; every 120 s an 8-thread "whisper" burst holds
+  the package at PL1 (about 56-58 W input at 35 W), and every other burst also
+  loads the dGPU to its cap. The daemon's own sampler, governor step, config
+  validation and `build_status` run on top, so settings changes behave like the
+  real thing: in `dynamic` mode a GPU-loaded burst at the 40 W ceiling crosses
+  the shed band and gets cut. It also has two fake incidents and an event log.
+- `--replay FILE`: plays a turbomacd sample log (`.jsonl` or `.jsonl.gz`, e.g.
+  from `/var/lib/turbomac/samples/`) at 1 record/s x `--speed`, looping. Settings
+  changes are validated and shown (bands, ceiling, modes) but never saved. The
+  record-to-status mapping is documented in `turbomac/tui/replay.py`.
+
+| Screen | Key | What |
+|---|---|---|
+| Dashboard | `1` | input gauge against ACPW with recover/shed/emergency markers and the input predicted for the current PL1; V x A and inferred PD contract; 60 s and 10 min sparklines (input, package, GPU, package temp); CPU (RAPL domains, PL1/PL2 as sysfs and MSR see them, power-limited/thermal/PROCHOT, per-core GHz and busy); GPU; governor (state, time in state, PL1 to ceiling, counters, non-CPU estimate, last action, fallback reason); all temperatures; fans; SMC rails; top processes; session peaks; a banner when the previous boot ended abruptly |
+| Settings | `2` | every config key with its value, default, bounds and meaning; edit and press `Enter` (selects apply when chosen); turbomacd's verdict shows inline (`REJECTED: ...` with the reason); `d` resets to defaults after a y/n; live preview of ceiling to predicted input and the bands at the live ACPW; config digest, persisted state, last change time |
+| GPU | `3` | auto / low / off, current draw, cap, DPM level, runtime status, PCI power state, switcheroo, panel owner, the steps of the last mode change. `off` (here or in Settings) opens a dialog that only proceeds when you type `OFF` |
+| Incidents | `4` | abrupt boots; the selected one shows input/package/GPU sparklines of its last 60 s, the last values, top processes and the journal tail |
+| Log | `5` | the daemon's events, newest last, with a text filter and a type filter |
+
+Other keys: `r` resets the session peaks, `p` pauses and resumes the display,
+`?` help, `q` quit, `Esc` leaves a text field (while a field has focus, keys go
+to it). Tabs, fields, radio buttons and table rows are clickable. The layout is
+made for 120x36; below 110 columns the rails, top-processes and 10 min
+sparklines are hidden and the dashboard scrolls (80x24 works).
+
+Screenshots of every screen (mock and replay) are in
+`receipts/phase2-screens/`; regenerate them with
+`.venv-tui/bin/python -m turbomac.tui.screenshots`.
+
 ## Rollback
 
 ```sh
@@ -127,7 +187,8 @@ capture is ignored in favour of those), powers the dGPU back on if needed and
 restores its cap to max with DPM `auto`. Kept: logs, incidents, config, the
 disabled unit files and `/opt/turbomac`, plus `/etc/modules-load.d/turbomac.conf`,
 `/etc/sysusers.d/turbomac.conf`, the `/usr/local/bin` symlinks and group
-`turbomac`. `rollback.sh --purge` also removes those last four. A reboot also
+`turbomac`. `rollback.sh --purge` also removes those last four, and the TUI venv
+`/opt/turbomac/venv`. A reboot also
 restores every hardware default.
 
 ## Logs and incidents
@@ -186,7 +247,8 @@ restores every hardware default.
 Everything runs on macOS against fake sysfs trees; no hardware needed:
 
 ```sh
-cd linux && python3 -m unittest discover -s tests -v
+cd linux && python3 -m unittest discover -s tests -v              # daemon + CLI; TUI tests skip
+cd linux && .venv-tui/bin/python -m unittest discover -s tests    # everything, TUI included
 ```
 
 Paths come from `TURBOMAC_SYSROOT` (default `/`), with `TURBOMAC_SOCKET`,
