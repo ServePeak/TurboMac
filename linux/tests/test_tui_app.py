@@ -92,7 +92,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(be.config["governor"]["ceiling_w"], 38)
             row = app.query_one("#row-governor--ceiling_w")
             self.assertIn("applied", str(row.query_one(".set-result").render()))
-            self.assertIn("ceiling 38 W ≈ 68.0 W input", str(app.query_one("#cfg-preview").render()))
+            self.assertIn("ceiling 38 W ≈ 55.1 W input", str(app.query_one("#cfg-preview").render()))
             ceiling.value = "50"
             await pilot.press("enter")
             await self.settle(app, pilot)

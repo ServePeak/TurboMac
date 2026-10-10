@@ -10,7 +10,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, Select, Static
 
 from turbomac import config
-from turbomac.daemon.governor import predicted_input_w
+from turbomac.daemon.governor import INPUT_MODEL, predicted_input_w
 from turbomac.tui import fmt
 from turbomac.tui.fmt import DASH, DIM
 from turbomac.tui.widgets import ConfirmScreen, GpuOffScreen
@@ -258,7 +258,7 @@ class SettingsView(Vertical):
         t.append("\nbands    ", "bold")
         for name, r in ratios.items():
             t.append(f"{name} {r:g} → {fmt.w(acpw * r)}   " if th else f"{name} {DASH}   ", DIM)
-        t.append(f"of ACPW {fmt.w(acpw)}   model: input ≈ 20.9 W + 1.24 × PL1", DIM)
+        t.append(f"of ACPW {fmt.w(acpw)}   model: input ≈ {INPUT_MODEL[0]:g} W + {INPUT_MODEL[1]:g} × PL1", DIM)
         self.query_one("#cfg-preview", Static).update(t, layout=False)
 
     # editing ------------------------------------------------------------------------

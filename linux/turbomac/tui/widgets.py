@@ -205,7 +205,7 @@ Mouse: tabs, fields, radio buttons and table rows are clickable.
 
 Gauge: [#3fb950]green[/] below recover, [#f0a020]amber[/] up to shed, [#f85149]red[/] at shed and above.
 ▲ recover / shed / emergency bands (ratios of the live ACPW), ◆ input predicted
-for the current PL1 (20.9 W + 1.24 × PL1).
+for the current PL1 (8.0 W + 1.24 × PL1).
 
 Press any key to close."""
 

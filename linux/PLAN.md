@@ -29,7 +29,7 @@ module. Everything goes through sysfs that Linux already exposes to root.
 | powercap sysfs | `/sys/class/powercap/intel-rapl:0/constraint_{0,1}_power_limit_uw`, root-writable; subdomains core/uncore/dram exist with energy counters | daemon writes PL1/PL2 directly, no KEXT |
 | MSR access | `/dev/cpu/0/msr` present, `msr` and `intel_rapl_msr` loaded | daemon can read back 0x610 (limits + clamp bits) and 0x1B1 (power-limited-now bits) |
 | Input telemetry | applesmc keys PDTR (input W), ACPW (negotiated W), VD0R (V), ID0R (A) via `key_at_index*`; 911 keys total; no hwmon power attributes | daemon is the single owner of the selector; TUI never touches sysfs |
-| Input model (Ubuntu staircase) | input ≈ 20.9 W + 1.24 × package W | 35 W cap ≈ 64 W input, 40 W ≈ 71 W, 45 W ≈ 77 W |
+| Input model (Ubuntu staircase) | input ≈ 20.9 W + 1.24 × package W (GPU on, firmware fan curve); refit 2026-10-10 with GPU off + fan floor: ≈ 8.0 W + 1.24 × package W | then 35 W cap ≈ 64 W input, 40 W ≈ 71 W, 45 W ≈ 77 W; now 40 W ≈ 57.6 W (measured 55.5 mean / 59.3 1 s peak), 45 W ≈ 63.8 W, 50 W ≈ 70 W |
 | Adapter | ACPW 79.496 W at ~20.2 V ⇒ 4 A contract (80 W class, not the stock 87 W) | hard ceiling; worth checking adapter and cable |
 | dGPU | Radeon Pro 560, always on, 7 W idle, 29 W loaded, drives eDP-1, "Runtime PM not available", hwmon `power1_cap` writable (max 35 W), vga_switcheroo present (`2:DIS:+:Pwr`, `0:IGD: :Pwr`) | cap it; optionally power it off via switcheroo |
 | cpufreq | intel_pstate active, HWP on, EPP balance_performance, turbo on | leave alone by default; expose as settings |

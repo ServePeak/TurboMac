@@ -19,7 +19,7 @@ REASSERT_S = 10.0
 CUT_MIN_INTERVAL_S = 0.5
 EMERGENCY_HOLD_S = 5.0
 BACKOFF_MAX_S = 8.0
-INPUT_MODEL = (20.9, 1.24)  # input W ~= a + b * package W (Ubuntu staircase fit)
+INPUT_MODEL = (8.0, 1.24)  # input W ~= a + b * package W (staircase slope; intercept refit with GPU off + fan floor)
 
 
 @dataclass
