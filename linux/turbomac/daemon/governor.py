@@ -41,8 +41,11 @@ class GovState:
     fw_pl1_w: float | None = None
     fw_pl2_w: float | None = None
     last_action: str | None = None
+    thermal_cap_w: float | None = None  # effective ceiling while the thermal trim holds it below ceiling_w
+    last_thermal: float = -math.inf
     counters: dict[str, int] = field(default_factory=lambda: {
-        "cuts": 0, "emergencies": 0, "fallbacks": 0, "recoveries": 0, "writes": 0, "readback_failures": 0})
+        "cuts": 0, "emergencies": 0, "fallbacks": 0, "recoveries": 0, "writes": 0, "readback_failures": 0,
+        "thermal_trims": 0})
     time_in_state: dict[str, float] = field(default_factory=dict)
 
 
@@ -100,6 +103,29 @@ class _Step:
         s.counters["writes"] += 1
         s.last_action = f"{reason}: PL1 {pl1:g} W PL2 {pl2:g} W"
 
+    def thermal(self, temp_c: Any, floor: float, ceiling: float) -> float:
+        """Thermal trim (rule 8): returns the effective ceiling. At or above thermal_trim_c the cap steps
+        down by thermal_step_w per thermal_interval_s, starting from min(cap, PL1) so the first step
+        bites, never below the floor; below thermal_recover_c it steps back up the same way; in
+        between, or without a fresh package temperature, it holds."""
+        s, g = self.s, self.g
+        trim_c = g.get("thermal_trim_c")
+        cap = ceiling if s.thermal_cap_w is None or trim_c is None else min(max(s.thermal_cap_w, floor), ceiling)
+        if trim_c is not None and _num(temp_c) and self.now - s.last_thermal >= g["thermal_interval_s"]:
+            if temp_c >= trim_c:
+                start = min(cap, s.pl1_w) if s.pl1_w is not None else cap
+                if start > floor:
+                    old, cap = cap, max(floor, start - g["thermal_step_w"])
+                    s.last_thermal = self.now
+                    s.counters["thermal_trims"] += 1
+                    self.event("thermal_trim", from_w=old, to_w=cap, pkg_c=temp_c, trim_c=trim_c)
+            elif temp_c < g["thermal_recover_c"] and cap < ceiling:
+                old, cap = cap, min(ceiling, cap + g["thermal_step_w"])
+                s.last_thermal = self.now
+                self.event("thermal_recover", from_w=old, to_w=cap, pkg_c=temp_c)
+        s.thermal_cap_w = cap if cap < ceiling else None
+        return cap
+
     def fallback_w(self, static: float) -> float:
         """The fallback limit: the static cap, but never above what is already commanded."""
         return min(static, self.s.pl1_w) if self.s.pl1_w is not None else static
@@ -132,7 +158,7 @@ def step(state: GovState, sample: dict[str, Any], config: dict[str, Any], now: f
     mode = g["mode"]
     static = float(g["static_cap_w"])
     if mode == "off":
-        s.retry_at, s.fallback_reason = None, None
+        s.retry_at, s.fallback_reason, s.thermal_cap_w = None, None, None
         if s.state != OFF:  # leaving governed control: put the static cap back once
             w.write(static, static, "off", force=True)
         w.enter(OFF)
@@ -171,7 +197,7 @@ def step(state: GovState, sample: dict[str, Any], config: dict[str, Any], now: f
         w.event("retry", reason=s.fallback_reason)
 
     if mode == "static":
-        s.fallback_reason = None
+        s.fallback_reason, s.thermal_cap_w = None, None
         force = force or s.state != STATIC
         w.enter(STATIC)
         w.write(static, static, "static", force=force)
@@ -191,7 +217,8 @@ def step(state: GovState, sample: dict[str, Any], config: dict[str, Any], now: f
         return s, w.actions
 
     floor = min(float(g["floor_w"]), static)
-    ceiling = w.cap1(max(float(g["ceiling_w"]), static))
+    top = w.cap1(max(float(g["ceiling_w"]), static))
+    ceiling = w.thermal(sample.get("pkg_c"), floor, top)   # effective ceiling; NORMAL means PL1 at top
     resume = s.state not in (NORMAL, TRIM, EMERGENCY) or s.pl1_w is None
     if not resume:
         pl1 = s.pl1_w
@@ -200,7 +227,7 @@ def step(state: GovState, sample: dict[str, Any], config: dict[str, Any], now: f
     else:
         pl1 = static
     pl1 = min(max(pl1, floor), ceiling)
-    new = s.state if not resume else (NORMAL if pl1 >= ceiling else TRIM)
+    new = s.state if not resume else (NORMAL if pl1 >= top else TRIM)
     if valid:
         th = thresholds(acpw, g)
         m = mean if _num(mean) else pdtr
@@ -237,7 +264,7 @@ def step(state: GovState, sample: dict[str, Any], config: dict[str, Any], now: f
                         w.event("recover", from_w=old, to_w=pl1, input_mean_w=round(m, 2))
                 else:
                     s.below_recover_since = None
-                new = NORMAL if pl1 >= ceiling else TRIM
+                new = NORMAL if pl1 >= top else TRIM
     s.fallback_reason = None
     w.enter(new)
     pl2 = pl1 + g["burst_w"] if new in (NORMAL, TRIM) else pl1
@@ -248,5 +275,5 @@ def step(state: GovState, sample: dict[str, Any], config: dict[str, Any], now: f
 def summary(s: GovState) -> dict[str, Any]:
     return {"state": s.state, "since": s.since, "pl1_w": s.pl1_w, "pl2_w": s.pl2_w,
             "fallback_reason": s.fallback_reason, "retry_at": s.retry_at, "backoff_s": s.backoff_s,
-            "last_action": s.last_action, "counters": dict(s.counters),
+            "last_action": s.last_action, "thermal_cap_w": s.thermal_cap_w, "counters": dict(s.counters),
             "time_in_state": {k: round(v, 1) for k, v in s.time_in_state.items()}}

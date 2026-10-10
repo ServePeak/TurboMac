@@ -59,7 +59,8 @@ def render_status(s: dict[str, Any]) -> str:
         f"{_f(lat.get('v'), '{:.2f}')} V x {_f(lat.get('a'), '{:.2f}')} A  ACPW {_f(der.get('acpw_median_10s'), '{:.2f}')} W  "
         f"headroom {_f(der.get('headroom_w'))} W",
         f"bands   shed {_f(th.get('shed_w'))}  emergency {_f(th.get('emergency_w'))}  recover {_f(th.get('recover_w'))} W"
-        f"   ceiling {_f(gov.get('ceiling_w'), '{:g}')} W ~ {_f(der.get('pred_input_at_ceiling_w'))} W input",
+        f"   ceiling {_f(gov.get('ceiling_w'), '{:g}')} W ~ {_f(der.get('pred_input_at_ceiling_w'))} W input"
+        + (f"   thermal cap {gov['thermal_cap_w']:g} W" if gov.get("thermal_cap_w") is not None else ""),
         f"cpu     package {_f(lat.get('package_w'))} W  core {_f(lat.get('core_w'))}  uncore {_f(lat.get('uncore_w'))}  "
         f"dram {_f(lat.get('dram_w'))}  non-CPU est {_f(der.get('noncpu_est_w'))} W  busy {_f(cpu.get('busy_pct'), '{:.0f}')} %",
         f"limits  PL1 {_f(gov.get('pl1_w'), '{:g}')} / PL2 {_f(gov.get('pl2_w'), '{:g}')} W commanded  "
@@ -77,7 +78,8 @@ def render_status(s: dict[str, Any]) -> str:
         "fans    " + ("  ".join(f"{f.get('label')} {f.get('rpm')} rpm" for f in s.get("fans") or []) or "-")
         + ("  " + fan_floor_text(s["fan"]) if s.get("fan") else ""),
         f"counts  cuts {cnt.get('cuts', 0)}  emergencies {cnt.get('emergencies', 0)}  fallbacks {cnt.get('fallbacks', 0)}  "
-        f"recoveries {cnt.get('recoveries', 0)}  writes {cnt.get('writes', 0)}  readback failures {cnt.get('readback_failures', 0)}",
+        f"recoveries {cnt.get('recoveries', 0)}  thermal trims {cnt.get('thermal_trims', 0)}  writes {cnt.get('writes', 0)}  "
+        f"readback failures {cnt.get('readback_failures', 0)}",
         "peaks   " + "  ".join(f"{k} {v['value']:g} @ {_hms(v['ts'])}" for k, v in (s.get("peaks") or {}).items()),
     ]
     if gov.get("fallback_reason"):

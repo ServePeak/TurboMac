@@ -99,7 +99,7 @@ Defaults and validation bounds:
 | Key | Default | Bounds | Meaning |
 |---|---|---|---|
 | `static_cap_w` | 35 | 10–45 | boot and fallback cap, Intel's cTDP-down level for this part |
-| `ceiling_w` | 40 | static_cap–45 | highest PL1 the dynamic loop may recover to |
+| `ceiling_w` | 45 | static_cap–45 | highest PL1 the dynamic loop may recover to (40 until the phase45 receipt) |
 | `floor_w` | 10 | 9–20 | emergency target; below ~9 W the package does not respond |
 | `burst_w` | 0 | 0–5 | PL2 = PL1 + burst; 0 means no burst, which is the point |
 | `shed_ratio` | 0.88 | 0.70–0.95 | of live ACPW (70.0 W): cut |
@@ -109,6 +109,10 @@ Defaults and validation bounds:
 | `recover_step_w` | 1 | 1–5 | per recovery interval |
 | `recover_interval_s` | 3 | 1–30 | time below recover_ratio per step |
 | `stale_timeout_s` | 2 | 1–10 | missing SMC data ⇒ fallback |
+| `thermal_trim_c` | 97 | 80–99 or null | package °C that steps the dynamic ceiling down; null disables rule 8 |
+| `thermal_recover_c` | 92 | 70–trim−2 | the ceiling steps back up only below this |
+| `thermal_step_w` | 1 | 0.5–5 | per thermal step |
+| `thermal_interval_s` | 3 | 1–30 | minimum time between thermal steps |
 | `hard_max_w` | 45 | fixed | never write above TDP, whatever the config says |
 
 Loop (dynamic mode, evaluated on every SMC sample):
@@ -124,6 +128,14 @@ Loop (dynamic mode, evaluated on every SMC sample):
    (static cap) and retry with backoff.
 7. No valid SMC sample for `stale_timeout_s` ⇒ FALLBACK. Fallback is always
    the static cap, never "release to firmware".
+8. Thermal trim (added after the phase45 receipt: the machine sheds about 46 W
+   at 100 °C with both fans at maximum, so a sustained 45 W load reaches 100 °C
+   in about 2 minutes). Package °C ≥ `thermal_trim_c` ⇒ effective ceiling =
+   min(effective ceiling, PL1) − `thermal_step_w`, at most once per
+   `thermal_interval_s`, not below floor; < `thermal_recover_c` ⇒ effective
+   ceiling += step up to `ceiling_w`; in between, or with no package
+   temperature read in the last 3 s, it holds. Rules 3–4 work under the
+   effective ceiling; the state is NORMAL only while PL1 is at `ceiling_w`.
 
 Things kept from the macOS daemon: cut immediately, recover slowly; bands as
 ratios of live ACPW; 1 s windows; a 9–10 W effective floor; stale telemetry is
@@ -197,10 +209,11 @@ by humans. Defaults:
   "schema": 1,
   "governor": {
     "mode": "static",
-    "static_cap_w": 35, "ceiling_w": 40, "floor_w": 10, "burst_w": 0,
+    "static_cap_w": 35, "ceiling_w": 45, "floor_w": 10, "burst_w": 0,
     "shed_ratio": 0.88, "emergency_ratio": 0.94, "recover_ratio": 0.78,
     "cut_step_w": 5, "recover_step_w": 1, "recover_interval_s": 3,
-    "stale_timeout_s": 2
+    "stale_timeout_s": 2,
+    "thermal_trim_c": 97, "thermal_recover_c": 92, "thermal_step_w": 1, "thermal_interval_s": 3
   },
   "gpu": { "mode": "auto", "cap_w": 15 },
   "cpu": { "no_turbo": false, "epp": null, "max_perf_pct": null },

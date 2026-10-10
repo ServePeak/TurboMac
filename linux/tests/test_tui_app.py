@@ -83,7 +83,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await self.settle(app, pilot, 0.5)
             self.assertEqual(calls, [])           # loading the editors never applies anything
             ceiling = app.query_one("#ed-governor--ceiling_w", Input)
-            self.assertEqual(ceiling.value, "40")
+            self.assertEqual(ceiling.value, "45")
             ceiling.focus()
             ceiling.value = "38"
             await pilot.press("enter")
@@ -109,7 +109,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(app.screen, ConfirmScreen)
             await pilot.press("y")
             await self.settle(app, pilot)
-            self.assertEqual((be.config["governor"]["mode"], be.config["governor"]["ceiling_w"]), ("static", 40))
+            self.assertEqual((be.config["governor"]["mode"], be.config["governor"]["ceiling_w"]), ("static", 45))
             self.assertEqual(app.render_errors, [])
 
     async def test_gpu_off_needs_the_word_off(self):

@@ -122,7 +122,10 @@ class CpuPanel(Panel):
         temps = cpu.get("temps") or {}
         t = Text()
         fmt.kv(t, "package", w(lat.get("package_w")), "bold " + fmt.BLUE)
-        t.append(f"PL1 {fmt.g(gov.get('pl1_w'))} · PL2 {fmt.g(gov.get('pl2_w'))}\n", "bold")
+        t.append(f"PL1 {fmt.g(gov.get('pl1_w'))} · PL2 {fmt.g(gov.get('pl2_w'))}", "bold")
+        if fmt.isnum(gov.get("thermal_cap_w")):
+            t.append(f" · hot cap {fmt.g(gov['thermal_cap_w'])}", "bold " + fmt.RED)
+        t.append("\n")
         for label, key in (("core", "core_w"), ("uncore", "uncore_w"), ("dram", "dram_w")):
             fmt.kv(t, label, w(lat.get(key)), "")
         mhz = [m for m in cpu.get("mhz") or [] if fmt.isnum(m)]

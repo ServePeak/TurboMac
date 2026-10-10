@@ -42,6 +42,7 @@ class ReplayTest(unittest.TestCase):
         self.rows = load_rows()
         self.c = config.defaults()
         self.c["governor"]["mode"] = "dynamic"
+        self.c["governor"]["ceiling_w"] = 40   # the fixture's assertions were written for a 40 W ceiling
         self.s, self.trace = replay(self.rows, self.c)
 
     def test_fixture_shape(self):

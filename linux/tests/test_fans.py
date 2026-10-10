@@ -42,16 +42,16 @@ class DecideTest(unittest.TestCase):
 
     def test_ladder_steps_up_immediately(self):
         rows = run([(0, 77.9, 5.0), (1, 78.0, 5.0), (2, 86.0, 5.0), (3, 92.0, 5.0)])
-        self.assertEqual([r[1] for r in rows], [0, 3500, 4500, 5500])
+        self.assertEqual([r[1] for r in rows], [0, 3500, 4500, 5900])
         self.assertEqual(rows[2][2], "pkg 86 °C ≥ 86 °C")
-        self.assertEqual(run([(0, 95.0, 5.0)])[-1][1], 5500)            # straight to the top step
+        self.assertEqual(run([(0, 95.0, 5.0)])[-1][1], 5900)            # straight to the top step
 
     def test_ladder_steps_down_one_step_per_interval_below_step_minus_6(self):
         rows = run([(0, 93.0, 5.0)] + [(t, 87.0, 5.0) for t in range(1, 100)])
-        self.assertTrue(all(r[1] == 5500 for r in rows))                 # 87 >= 92 - 6: held
+        self.assertTrue(all(r[1] == 5900 for r in rows))                 # 87 >= 92 - 6: held
         rows = run([(0, 93.0, 5.0)] + [(t, 60.0, 5.0) for t in range(1, 80)])
         steps = {t: target for t, target, _ in rows}
-        self.assertEqual((steps[20], steps[21]), (5500, 4500))           # below 86 since t=1
+        self.assertEqual((steps[20], steps[21]), (5900, 4500))           # below 86 since t=1
         self.assertEqual((steps[40], steps[41]), (4500, 3500))           # one step per interval
         self.assertEqual((steps[60], steps[61]), (3500, 0))
         self.assertIn("cooling: 4500 rpm until pkg < 80 °C for 20 s", rows[30][2])
@@ -74,7 +74,7 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(run([(0, None, None)])[-1][1:], (0, "no temperature or power data"))
         self.assertEqual(run([(0, float("nan"), None)])[-1][1], 0)
         rows = run([(0, 93.0, 31.0), (1, None, 31.0), (2, 93.0, None), (3, None, None)])
-        self.assertEqual([r[1] for r in rows], [5500, 3500, 5500, 0])
+        self.assertEqual([r[1] for r in rows], [5900, 3500, 5900, 0])
 
 
 class ControllerTest(unittest.TestCase):
@@ -187,7 +187,7 @@ class ControllerTest(unittest.TestCase):
         c = self.ctl()
         c.start(DEFAULT)
         c.tick(0.0, 90.0, 10.0, DEFAULT)
-        self.assertEqual((self.f(1, "min"), self.f(2, "min"), c.status()["target_rpm"]), ("5500", "5489", 5500))
+        self.assertEqual((self.f(1, "min"), self.f(2, "min"), c.status()["target_rpm"]), ("5900", "5489", 5900))
         self.assertEqual(c.status()["reason"], "pkg 90 °C ≥ 90 °C")
         c.on_config({**DEFAULT, "mode": "auto"})           # restores immediately
         self.assertEqual((self.f(1, "min"), self.f(2, "min")), ("2160", "2000"))
@@ -195,7 +195,7 @@ class ControllerTest(unittest.TestCase):
         c.tick(1.0, 95.0, 40.0, {**DEFAULT, "mode": "auto"})
         self.assertEqual((len(self.writes), c.status()["mode"]), (n, "auto"))   # auto never writes
         c.tick(2.0, 95.0, 40.0, DEFAULT)                   # back to floor (e.g. SIGHUP reload)
-        self.assertEqual(self.f(1, "min"), "5500")
+        self.assertEqual(self.f(1, "min"), "5900")
         self.assertEqual([e["mode"] for e in self.types("fan_mode")], ["auto", "floor"])
         helpers.write(os.path.join(self.base, "fan1_min"), "5000\n")   # left over by a crash
         c3 = self.ctl()
@@ -231,10 +231,10 @@ class DaemonFanTest(unittest.TestCase):
         d.tick(t, slow=False)
         self.assertEqual(self.f(1), "2160")                       # fast ticks never touch the fans
         d.tick(t + 0.25, slow=True)
-        self.assertEqual((self.f(1), self.f(2)), ("5500", "5489"))   # right fan clamped to its max
+        self.assertEqual((self.f(1), self.f(2)), ("5900", "5489"))   # right fan clamped to its max
         st = d.dispatch("status", {})
         self.assertEqual((st["fan"]["mode"], st["fan"]["target_rpm"], st["fan"]["reason"]),
-                         ("floor", 5500, "pkg 90 °C ≥ 90 °C"))
+                         ("floor", 5900, "pkg 90 °C ≥ 90 °C"))
         self.assertEqual(st["governor"]["state"], "STATIC")
         r = d.dispatch("config.set", {"fan.mode": "auto"})
         self.assertEqual(r["accepted"], {"fan.mode": "auto"})

@@ -18,6 +18,7 @@ EXTRA_SMC_KEYS = ("PSTR", "PCPC", "PCPG", "PCPT", "PG0R", "PHPC")
 FAST_SMC_KEYS = ("PDTR",)                    # every fast tick (4 Hz)
 FULL_SMC_KEYS = ("PDTR", "VD0R", "ID0R", "ACPW")   # on the slow tick (1 Hz)
 HISTORY_FIELDS = ("ts", "input_w", "pkg_w", "gpu_w", "pkg_c", "pl1_w", "state")
+TEMP_FRESH_S = 3.0   # the governor ignores a package temperature older than this
 
 
 class Window:
@@ -70,6 +71,7 @@ class Sampler:
         self.w = {k: Window(12.0) for k in ("input", "pkg", "core", "uncore", "dram", "acpw", "v", "a")}
         self.latest: dict[str, Any] = {}
         self.slow_data: dict[str, Any] = {}
+        self.slow_mono: float | None = None
         self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY_LEN)
         self.hist_lock = threading.Lock()
         self.peaks: dict[str, dict[str, float]] = {}
@@ -143,7 +145,7 @@ class Sampler:
         }
         self._peak("gpu_w", d["gpu"].get("power_w"), wall)
         self._peak("pkg_c", d["cpu"].get("temps", {}).get("pkg_c"), wall)
-        self.slow_data = d
+        self.slow_data, self.slow_mono = d, now
         return d
 
     def derived(self, now: float, ceiling_w: float) -> dict[str, Any]:
@@ -158,9 +160,11 @@ class Sampler:
 
     def gov_input(self, now: float) -> dict[str, Any]:
         """What the governor step consumes."""
+        fresh = self.slow_mono is not None and now - self.slow_mono <= TEMP_FRESH_S
         return {"pdtr_w": self.latest.get("pdtr_w") if self.latest.get("valid") else None,
                 "input_mean_1s": self.w["input"].mean(now, 1.0),
-                "acpw_w": self.w["acpw"].median(now, 10.0)}
+                "acpw_w": self.w["acpw"].median(now, 10.0),
+                "pkg_c": (self.slow_data.get("cpu") or {}).get("temps", {}).get("pkg_c") if fresh else None}
 
     def aggregate(self, now: float, wall: float, ceiling_w: float, gov: dict[str, Any],
                   fan: dict[str, Any] | None = None, derived: dict[str, Any] | None = None,
@@ -180,6 +184,7 @@ class Sampler:
             "noncpu_w": _r(d["noncpu_est_w"]), "headroom_w": _r(d["headroom_w"]),
             "gpu_w": _r(gpu.get("power_w")), "pkg_c": (sd.get("cpu") or {}).get("temps", {}).get("pkg_c"),
             "pl1_w": gov.get("pl1_w"), "pl2_w": gov.get("pl2_w"), "state": gov.get("state"),
+            "thermal_cap_w": gov.get("thermal_cap_w"),
             "smc_valid": self.latest.get("valid", False),
         }
         rec.update({k: sd.get(k) for k in ("smc", "msr", "msr_limits", "smc_temps", "fans", "gpu", "cpu")})

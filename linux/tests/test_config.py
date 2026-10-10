@@ -9,13 +9,14 @@ from turbomac import config
 
 PLAN_DEFAULTS = {
     "schema": 1,
-    "governor": {"mode": "static", "static_cap_w": 35, "ceiling_w": 40, "floor_w": 10, "burst_w": 0,
+    "governor": {"mode": "static", "static_cap_w": 35, "ceiling_w": 45, "floor_w": 10, "burst_w": 0,  # 45: phase45
                  "shed_ratio": 0.88, "emergency_ratio": 0.94, "recover_ratio": 0.78,
-                 "cut_step_w": 5, "recover_step_w": 1, "recover_interval_s": 3, "stale_timeout_s": 2},
+                 "cut_step_w": 5, "recover_step_w": 1, "recover_interval_s": 3, "stale_timeout_s": 2,
+                 "thermal_trim_c": 97, "thermal_recover_c": 92, "thermal_step_w": 1, "thermal_interval_s": 3},
     "gpu": {"mode": "auto", "cap_w": 15},
     "fan": {"mode": "floor", "power_floor_w": 25, "power_floor_rpm": 3500,             # Phase 4 fan floor
-            "t1_c": 78, "t1_rpm": 3500, "t2_c": 84, "t2_rpm": 4500, "t3_c": 90, "t3_rpm": 5500,
-            "hysteresis_c": 6, "step_down_interval_s": 20, "max_rpm": 5500},
+            "t1_c": 78, "t1_rpm": 3500, "t2_c": 84, "t2_rpm": 4500, "t3_c": 90, "t3_rpm": 5900,
+            "hysteresis_c": 6, "step_down_interval_s": 20, "max_rpm": 5900},                  # 5900: phase45
     "cpu": {"no_turbo": None, "epp": None, "max_perf_pct": None},  # PLAN: false; null = untouched
     "logging": {"retention_days": 14, "max_mib": 1024},  # PLAN says 256; raised with gzip (audit batch 1)
 }
@@ -72,9 +73,10 @@ class ConfigTest(unittest.TestCase):
         self.assertIn("fixed", rej["governor.hard_max_w"])
 
     def test_cross_field_rules(self):
-        _, rej = config.validate({"governor.static_cap_w": 42})          # ceiling 40
+        base40 = config.apply_updates(config.defaults(), {"governor.ceiling_w": 40})
+        _, rej = config.validate({"governor.static_cap_w": 42}, base40)
         self.assertIn("ceiling", rej["governor.static_cap_w"])
-        acc, rej = config.validate({"governor.static_cap_w": 42, "governor.ceiling_w": 44})
+        acc, rej = config.validate({"governor.static_cap_w": 42, "governor.ceiling_w": 44}, base40)
         self.assertEqual((len(acc), rej), (2, {}))
         _, rej = config.validate({"governor.ceiling_w": 30})              # below static 35
         self.assertIn("governor.ceiling_w", rej)
@@ -88,14 +90,30 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(rej, {})
         _, rej = config.validate({"governor.shed_ratio": 0.93})           # breaks emergency 0.94
         self.assertIn("governor.shed_ratio", rej)
-        base = config.apply_updates(config.defaults(), {"governor.ceiling_w": 45})
-        acc, rej = config.validate({"governor.static_cap_w": 45}, base)
+        acc, rej = config.validate({"governor.static_cap_w": 45})        # ceiling 45
         self.assertEqual(rej, {})
+        _, rej = config.validate({"governor.thermal_recover_c": 96})      # trim 97 - 2
+        self.assertIn("thermal_recover_c", rej["governor.thermal_recover_c"])
+        acc, rej = config.validate({"governor.thermal_recover_c": 95})
+        self.assertEqual((acc, rej), ({"governor.thermal_recover_c": 95}, {}))
+        _, rej = config.validate({"governor.thermal_trim_c": 93})         # breaks recover 92
+        self.assertIn("governor.thermal_trim_c", rej)
+        acc, rej = config.validate({"governor.thermal_trim_c": None, "governor.thermal_recover_c": 97})
+        self.assertEqual(rej, {})                                         # disabled: no pairing rule
+
+    def test_thermal_bounds(self):
+        ok = {"governor.thermal_trim_c": 99, "governor.thermal_recover_c": 70, "governor.thermal_step_w": 0.5,
+              "governor.thermal_interval_s": 30}
+        self.assertEqual(config.validate(ok), (ok, {}))
+        bad = {"governor.thermal_trim_c": 100, "governor.thermal_recover_c": 69, "governor.thermal_step_w": 6,
+               "governor.thermal_interval_s": 0.5}
+        acc, rej = config.validate(bad)
+        self.assertEqual((acc, set(rej)), ({}, set(bad)))
 
     def test_apply_updates_does_not_mutate(self):
         c = config.defaults()
         new = config.apply_updates(c, {"governor.ceiling_w": 38, "cpu.epp": "balance_power"})
-        self.assertEqual((c["governor"]["ceiling_w"], new["governor"]["ceiling_w"]), (40, 38))
+        self.assertEqual((c["governor"]["ceiling_w"], new["governor"]["ceiling_w"]), (45, 38))
         self.assertEqual(config.get(new, "cpu.epp"), "balance_power")
         self.assertNotEqual(config.digest(c), config.digest(new))
 
@@ -112,7 +130,7 @@ class ConfigTest(unittest.TestCase):
             with open(p, "w") as fh:
                 json.dump({"schema": 1, "governor": {"ceiling_w": 99, "floor_w": 12}, "junk": 1}, fh)
             loaded, problems = config.load(p)
-            self.assertEqual(loaded["governor"]["ceiling_w"], 40)
+            self.assertEqual(loaded["governor"]["ceiling_w"], 45)
             self.assertEqual(loaded["governor"]["floor_w"], 12)
             self.assertEqual(set(problems), {"governor.ceiling_w", "junk"})
             with open(p, "w") as fh:

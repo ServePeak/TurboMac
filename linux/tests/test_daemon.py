@@ -293,6 +293,16 @@ class SmcCadenceTest(unittest.TestCase):
         self.assertEqual((lat["acpw_w"], lat["valid"], s.gov_input(3.0)["acpw_w"]), (None, True, 79.496))
         self.assertFalse(Sampler(smc=self.smc).fast(0.0, 0.0, full=True)["valid"])   # no valid ACPW yet
 
+    def test_governor_gets_the_package_temperature_only_while_fresh(self):
+        class Cpu:
+            def read(self, now):
+                return {"temps": {"pkg_c": 97.0}}
+        s = Sampler(smc=self.smc, cpu=Cpu())
+        self.assertIsNone(s.gov_input(0.0)["pkg_c"])              # no slow read yet
+        s.slow(1.0, 1001.0)
+        self.assertEqual((s.gov_input(1.0)["pkg_c"], s.gov_input(4.0)["pkg_c"]), (97.0, 97.0))
+        self.assertIsNone(s.gov_input(4.25)["pkg_c"])             # older than TEMP_FRESH_S: the trim holds
+
     def test_temps_and_rails_every_3_s_fans_rpm_every_call(self):
         base = helpers.add_applesmc_fans(self.tmp.name)
         helpers.write(f"{base}/temp1_label", "TC0P\n")

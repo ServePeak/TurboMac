@@ -168,3 +168,27 @@ minutes either way, and on a warm chassis the CPU's own throttle at the end is
 as busy as it was at 50 W. No external PROCHOT in either 3-minute run, no cuts,
 input ~64 W. 45 W sustained is right at the machine's cooling capacity (~46 W at
 100 °C), not below it. Left live: ceiling 45 W, fan t3/max 5900 rpm.
+
+## Thermal trim (governor rule 8), 3-minute fft at 45 W (owner asked)
+
+New rule: at package ≥ 97 °C the dynamic ceiling steps down 1 W per 3 s from
+the current PL1 (not below the floor); below 92 °C it steps back up; in between
+it holds. Defaults now ceiling 45 W, fan t3/max 5900 rpm. Deployed 16:40 UTC;
+`probe.py 45 fft 180 101`, load 16:42:27–16:45:27 UTC, raw rows
+`probe-fft-45w-180s-trim.json`.
+
+| Time | Package °C | Ceiling / package W | Input W | Notes |
+|---|---|---|---|---|
+| 0–60 s | 82 → 97 | 45 / 45.0 | 62–63.5 | power-limited, fans 5900 / 5490 from ~20 s |
+| 61–64 s | 97 | 45 → 44 → 43 | 61 | first two trims 3 s apart |
+| 1:13 | 96–97 | 42 | 60 | |
+| 1:43 | 96 | 41 | 58.6 | |
+| 2:25 | 95–96 | 40 | 57.4 | held to the end |
+| after | 78 → 71 | 41, 42, 43 … back to 45 | | thermal_recover 1 W per 3 s |
+
+Peak 97 °C; the CPU's own throttle counter did not move during the whole run
+(+3500 to +10800 per 5 s at the end of the untrimmed 45 W runs), MSR thermal
+flag never set, no PROCHOT, no cuts, input 60.3 W mean / 63.7 W peak.
+6868 bogo ops/s: 3 % under the untrimmed 45 W run on a cool chassis (7082),
+12 % over 50 W (6147). On this chassis the heaviest synthetic load settles at
+~40 W and 95–96 °C; lighter loads keep the full 45 W.

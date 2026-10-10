@@ -88,6 +88,10 @@ cleanly.
   above the limit already in force), retried with 1/2/4/8 s backoff; the
   emergency rule keeps working while it waits. Limits are rounded down to the
   1/8 W RAPL unit before writing. ACPW outside 30..100 W counts as invalid.
+  Thermal trim: while the package is at or above `thermal_trim_c` (97 °C) the
+  effective ceiling steps down 1 W per 3 s from the current PL1 (not below
+  the floor); below `thermal_recover_c` (92 °C) it steps back up to
+  `ceiling_w`; in between it holds. Status shows it as `thermal cap`.
 
 ```sh
 turbomacctl config                                   # show everything
@@ -133,8 +137,8 @@ How (once a second, from the daemon's 1 Hz tick, after the governor step):
 - power rule: 1 s median package power ≥ `fan.power_floor_w` (25 W) ⇒ at least
   `fan.power_floor_rpm` (3500 rpm), engaged immediately;
 - temperature ladder on the coretemp package sensor: ≥ `t1_c` 78 °C ⇒ 3500 rpm,
-  ≥ `t2_c` 86 °C ⇒ 4500 rpm, ≥ `t3_c` 92 °C ⇒ 5500 rpm, stepping up immediately;
-- floor = the higher of the two, at most `fan.max_rpm` (5500 rpm) and each fan's
+  ≥ `t2_c` 84 °C ⇒ 4500 rpm, ≥ `t3_c` 90 °C ⇒ 5900 rpm, stepping up immediately;
+- floor = the higher of the two, at most `fan.max_rpm` (5900 rpm) and each fan's
   own `fan*_max` (the right fan tops out at 5489 rpm), never below the captured
   hardware minimum;
 - release is slow: a rule lets go only after its input has been below

@@ -11,12 +11,17 @@ ACPW = 79.496  # shed 69.96, emergency 74.73, recover 62.01
 def cfg(mode="dynamic", **over):
     c = config.defaults()
     c["governor"]["mode"] = mode
+    c["governor"]["ceiling_w"] = 40   # these tests were written for a 40 W ceiling
     c["governor"].update(over)
     return c
 
 
 def smp(pdtr, mean=None, acpw=ACPW, readback=None):
     return {"pdtr_w": pdtr, "input_mean_1s": pdtr if mean is None else mean, "acpw_w": acpw, "readback": readback}
+
+
+def hot(pdtr, pkg_c):
+    return {**smp(pdtr), "pkg_c": pkg_c}
 
 
 def writes(actions):
@@ -231,6 +236,46 @@ class GovernorTest(unittest.TestCase):
         self.assertAlmostEqual(s.time_in_state[TRIM], 4.0)
         self.assertAlmostEqual(s.time_in_state[STATIC], 1.0)
         self.assertEqual(gv.summary(s)["state"], STATIC)
+
+    def test_thermal_trim_steps_down_holds_and_recovers(self):
+        c = cfg(ceiling_w=45)
+        s, acts = gv.step(at(pl1=45.0), hot(40.0, 97.0), c, 100.0)
+        self.assertEqual((s.state, writes(acts), s.thermal_cap_w), (TRIM, [(44.0, 44.0)], 44.0))
+        self.assertEqual([(e["from_w"], e["to_w"]) for e in events(acts, "thermal_trim")], [(45.0, 44.0)])
+        s, acts = gv.step(s, hot(40.0, 99.0), c, 102.0)                  # interval 3 s not elapsed
+        self.assertEqual((writes(acts), s.thermal_cap_w), ([], 44.0))
+        s, acts = gv.step(s, hot(40.0, 99.0), c, 103.0)
+        self.assertEqual((writes(acts), s.counters["thermal_trims"]), ([(43.0, 43.0)], 2))
+        for t in (106.0, 109.0):                                          # 92 <= 95 < 97: hold
+            s, acts = gv.step(s, hot(40.0, 95.0), c, t)
+            self.assertEqual((s.pl1_w, s.thermal_cap_w, events(acts, "thermal_recover")), (43.0, 43.0, []))
+        s, acts = gv.step(s, hot(40.0, 91.0), c, 112.0)                  # below 92: cap up, PL1 follows
+        self.assertEqual((s.pl1_w, s.thermal_cap_w), (44.0, 44.0))
+        self.assertEqual(len(events(acts, "thermal_recover")), 1)
+        s, acts = gv.step(s, hot(40.0, 90.0), c, 115.0)
+        self.assertEqual((s.state, s.pl1_w, s.thermal_cap_w), (NORMAL, 45.0, None))
+        self.assertIsNone(gv.summary(s)["thermal_cap_w"])
+
+    def test_thermal_trim_starts_from_a_power_trimmed_pl1_and_stops_at_the_floor(self):
+        c = cfg(ceiling_w=45)
+        s, acts = gv.step(at(TRIM, pl1=30.0), hot(40.0, 98.0), c, 100.0)
+        self.assertEqual((writes(acts), s.thermal_cap_w), ([(29.0, 29.0)], 29.0))
+        s, acts = gv.step(at(TRIM, pl1=10.5), hot(40.0, 98.0), c, 100.0)
+        self.assertEqual((s.pl1_w, s.thermal_cap_w), (10.0, 10.0))
+        s, acts = gv.step(s, hot(40.0, 99.0), c, 104.0)                  # at the floor: no further trim
+        self.assertEqual((s.pl1_w, events(acts, "thermal_trim"), s.counters["thermal_trims"]), (10.0, [], 1))
+
+    def test_thermal_trim_holds_without_temperature_and_releases_when_disabled(self):
+        c = cfg(ceiling_w=45)
+        s, _ = gv.step(at(pl1=45.0), hot(40.0, 97.0), c, 100.0)
+        s, acts = gv.step(s, smp(40.0), c, 104.0)                        # no pkg_c (stale or unreadable)
+        self.assertEqual((s.pl1_w, s.thermal_cap_w, events(acts, "thermal_trim")), (44.0, 44.0, []))
+        s, acts = gv.step(s, hot(40.0, 99.0), cfg(ceiling_w=45, thermal_trim_c=None), 108.0)
+        self.assertIsNone(s.thermal_cap_w)
+        self.assertEqual(s.pl1_w, 45.0)                                   # power recovery, no thermal hold
+        s, _ = gv.step(at(pl1=45.0), hot(40.0, 97.0), c, 100.0)
+        s, _ = gv.step(s, hot(40.0, 97.0), cfg("static"), 101.0)
+        self.assertEqual((s.state, s.thermal_cap_w), (STATIC, None))
 
     def test_input_state_is_not_mutated(self):
         s0 = at()

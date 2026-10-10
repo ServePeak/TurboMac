@@ -102,7 +102,7 @@ class ReplayBackend(SimBackend):
         self.history_rows: deque[dict[str, Any]] = deque(maxlen=HISTORY_LEN)
         self.peaks: dict[str, dict[str, float]] = {}
         self.counters = {"cuts": 0, "emergencies": 0, "fallbacks": 0, "recoveries": 0, "writes": 0,
-                         "readback_failures": 0}
+                         "readback_failures": 0, "thermal_trims": 0}
         self.state, self.since, self.prev_pl1 = None, self.t0, None
         self.gpu_result: dict[str, Any] | None = None
         self.emit_at = self.t0
@@ -197,7 +197,8 @@ class ReplayBackend(SimBackend):
             "thresholds": governor.thresholds(acpw, g),
             "governor": {"mode": g["mode"], "state": rec.get("state"), "since": self.since,
                          "pl1_w": rec.get("pl1_w"), "pl2_w": rec.get("pl2_w"), "fallback_reason": None,
-                         "retry_at": None, "backoff_s": 0.0, "last_action": None, "counters": dict(self.counters),
+                         "retry_at": None, "backoff_s": 0.0, "last_action": None,
+                         "thermal_cap_w": rec.get("thermal_cap_w"), "counters": dict(self.counters),
                          "time_in_state": {}, "in_state_s": round(rec["ts"] - self.since, 1),
                          "ceiling_w": g["ceiling_w"], "static_cap_w": g["static_cap_w"], "floor_w": g["floor_w"],
                          "last_write": None},
