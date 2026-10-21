@@ -898,6 +898,18 @@ private:
             config.cruiseTargetRatio = profile_.cruiseTargetRatio;
             config.guardTargetRatio = profile_.guardTargetRatio;
             config.shedTargetRatio = profile_.shedTargetRatio;
+            if (profile_.performanceMode) {
+                // Schema-3 performance profile: fixed RAPL targets. Input power
+                // becomes advisory telemetry; the live captured limits remain
+                // the bounds the daemon can never exceed.
+                config.fixedTargets = true;
+                config.fixedPL1W = std::min(
+                    profile_.performancePL1W, config.raplCeilingPL1W
+                );
+                config.fixedPL2W = std::min(
+                    profile_.performancePL2W, config.raplCeilingPL2W
+                );
+            }
         }
         policy_.reset(config);
         energyTracker_.reset();
@@ -1048,6 +1060,8 @@ private:
                << (profileValid_ && profile_.validationPassed ? "true" : "false")
                << ",\"telemetry_ready\":" << (snapshot.ready ? "true" : "false")
                << ",\"band\":\"" << GovernorPolicy::bandName(snapshot.band) << "\""
+               << ",\"policy_mode\":\""
+               << (snapshot.fixedTargets ? "performance" : "input_governed") << "\""
                << ",\"input_w\":" << snapshot.inputW
                << ",\"capacity_w\":" << snapshot.capacityW
                << ",\"package_w\":" << snapshot.packageW
@@ -1249,6 +1263,11 @@ private:
                << "Auto-arm: "
                << (profileValid_ && profile_.autoArm ? "enabled" : "disabled") << "\n"
                << "Band: " << GovernorPolicy::bandName(snapshot.band) << "\n"
+               << "Governor mode: "
+               << (snapshot.fixedTargets
+                    ? "performance (fixed RAPL targets)"
+                    : "input-power governed")
+               << "\n"
                << "Input / capacity: " << snapshot.inputW << " / " << snapshot.capacityW << " W\n"
                << "Package raw/filtered/aligned / non-CPU: " << snapshot.packageW << " / "
                << snapshot.filteredPackageW << " / " << snapshot.alignedPackageW

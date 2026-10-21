@@ -217,7 +217,7 @@ bool ProfileStore::load(CalibrationProfile *profile, std::string *error) {
     int64_t schema = 0;
     if (schemaValue == values.end()
         || !parseInt64(schemaValue->second, &schema)
-        || (schema != 1 && schema != 2)) {
+        || (schema != 1 && schema != 2 && schema != 3)) {
         return setError(error, "profile contains an unsupported schema version");
     }
     std::set<std::string> expected = common;
@@ -225,6 +225,11 @@ bool ProfileStore::load(CalibrationProfile *profile, std::string *error) {
         expected.insert({
             "guard_ratio", "shed_ratio", "emergency_ratio",
             "cruise_target_ratio", "guard_target_ratio", "shed_target_ratio"
+        });
+    }
+    if (schema == 3) {
+        expected.insert({
+            "performance_mode", "performance_pl1_w", "performance_pl2_w"
         });
     }
     if (values.size() != expected.size()) {
@@ -260,6 +265,12 @@ bool ProfileStore::load(CalibrationProfile *profile, std::string *error) {
             || !parseDouble(values["shed_target_ratio"], &profile->shedTargetRatio))) {
         return setError(error, "profile contains an invalid control policy");
     }
+    if (schema == 3
+        && ((values["performance_mode"] != "true" && values["performance_mode"] != "false")
+            || !parseDouble(values["performance_pl1_w"], &profile->performancePL1W)
+            || !parseDouble(values["performance_pl2_w"], &profile->performancePL2W))) {
+        return setError(error, "profile contains an invalid performance policy");
+    }
     int64_t pointCount = 0;
     if (!parseInt64(values["calibration_point_count"], &pointCount)
         || pointCount < 1
@@ -268,6 +279,9 @@ bool ProfileStore::load(CalibrationProfile *profile, std::string *error) {
     }
     profile->calibrationPointCount = (uint32_t)pointCount;
     profile->schemaVersion = (uint32_t)schema;
+    profile->performanceMode = schema == 3
+        ? values["performance_mode"] == "true"
+        : false;
     profile->validationPassed = values["validation_passed"] == "true";
     profile->autoArm = values["auto_arm"] == "true";
     profile->identity.hardwareUUID = values["hardware_uuid"];
@@ -317,6 +331,11 @@ bool ProfileStore::save(const CalibrationProfile &profile, std::string *error) {
         content += line("guard_target_ratio", profile.guardTargetRatio);
         content += line("shed_target_ratio", profile.shedTargetRatio);
     }
+    if (profile.schemaVersion == 3U) {
+        content += line("performance_mode", profile.performanceMode ? "true" : "false");
+        content += line("performance_pl1_w", profile.performancePL1W);
+        content += line("performance_pl2_w", profile.performancePL2W);
+    }
     content += line("calibration_point_count", std::to_string(profile.calibrationPointCount));
     content += line("validation_passed", profile.validationPassed ? "true" : "false");
     content += line("auto_arm", profile.autoArm ? "true" : "false");
@@ -357,7 +376,7 @@ bool ProfileStore::save(const CalibrationProfile &profile, std::string *error) {
 
 bool ProfileStore::validate(const CalibrationProfile &profile, std::string *error) {
     const MachineIdentity &identity = profile.identity;
-    if ((profile.schemaVersion != 1U && profile.schemaVersion != 2U)
+    if ((profile.schemaVersion != 1U && profile.schemaVersion != 2U && profile.schemaVersion != 3U)
         || !safeText(identity.hardwareUUID)
         || !safeText(identity.modelIdentifier)
         || !safeText(identity.cpuBrand)
@@ -406,6 +425,23 @@ bool ProfileStore::validate(const CalibrationProfile &profile, std::string *erro
         || (!profile.validationPassed && profile.validatedAt != 0)
         || (profile.autoArm && !profile.validationPassed)) {
         return setError(error, "calibration profile failed bounds validation");
+    }
+    // Schema 3 = performance profile: fixed RAPL targets instead of ACPW
+    // bands. Targets must sit inside the profile ceilings, PL2 >= PL1, and
+    // auto-arm is always refused: a performance hand-off is supervised only.
+    if (profile.performanceMode != (profile.schemaVersion == 3U)
+        || (profile.schemaVersion == 3U
+            && (!std::isfinite(profile.performancePL1W)
+                || profile.performancePL1W < profile.raplFloorW
+                || profile.performancePL1W > profile.raplCeilingPL1W
+                || !std::isfinite(profile.performancePL2W)
+                || profile.performancePL2W < profile.performancePL1W
+                || profile.performancePL2W > profile.raplCeilingPL2W
+                || profile.autoArm))) {
+        return setError(
+            error,
+            "performance profile failed bounds validation"
+        );
     }
     return true;
 }

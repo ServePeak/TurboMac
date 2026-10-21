@@ -13,6 +13,9 @@ enum class GovernorBand {
 
 struct PolicyConfig {
     double reserveW = 2.0;
+    bool fixedTargets = false;
+    double fixedPL1W = 0.0;
+    double fixedPL2W = 0.0;
     double raplFloorW = 5.0;
     double raplCeilingPL1W = 45.0;
     double raplCeilingPL2W = 55.0;
@@ -29,6 +32,7 @@ struct PolicyConfig {
 
 struct PolicySnapshot {
     GovernorBand band = GovernorBand::Cruise;
+    bool fixedTargets = false;
     double capacityW = 0.0;
     double inputW = 0.0;
     double filteredInputW = 0.0;

@@ -127,7 +127,8 @@ PolicySnapshot GovernorPolicy::evaluate(double nowSeconds) {
         + config_.reserveW;
     updateBand(nowSeconds);
     updateLimits(nowSeconds);
-    snapshot_.nonCPUOverBudget = snapshot_.band == GovernorBand::Emergency
+    snapshot_.nonCPUOverBudget = !config_.fixedTargets
+        && snapshot_.band == GovernorBand::Emergency
         && snapshot_.pl1W <= config_.raplFloorW + 0.05
         && (snapshot_.inputW >= snapshot_.emergencyW
             || snapshot_.predictedInputW >= snapshot_.emergencyW);
@@ -304,6 +305,28 @@ void GovernorPolicy::updateBand(double now) {
 }
 
 void GovernorPolicy::updateLimits(double now) {
+    if (config_.fixedTargets) {
+        // Performance profile: PL1/PL2 come straight from the profile targets,
+        // clamped to the verified ceilings. The input-power bands below stay
+        // computed for telemetry and the TUI, but they drive no limit changes:
+        // with the battery installed the adapter budget is not a CPU limit.
+        snapshot_.fixedTargets = true;
+        snapshot_.stateTargetW = clampValue(
+            config_.fixedPL1W, config_.raplFloorW, config_.raplCeilingPL1W
+        );
+        snapshot_.desiredPL1W = snapshot_.stateTargetW;
+        snapshot_.pl1W = snapshot_.stateTargetW;
+        snapshot_.pl2W = clampValue(
+            std::max(snapshot_.stateTargetW, config_.fixedPL2W),
+            snapshot_.stateTargetW,
+            config_.raplCeilingPL2W
+        );
+        snapshot_.recoveryIntervalS = 0.0;
+        lastIncreaseTime_ = now;
+        limitInitialized_ = true;
+        return;
+    }
+
     // Battery-buffered allowance (operator request). While the battery is
     // above the 50% state-of-charge gate, it covers adapter deficits, so the
     // CPU limit tracks the cruise target without subtracting the non-CPU

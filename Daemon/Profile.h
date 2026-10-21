@@ -32,6 +32,9 @@ struct CalibrationProfile {
     double guardTargetRatio = 0.5221;
     double shedTargetRatio = 0.4781;
     uint32_t calibrationPointCount = 0U;
+    bool performanceMode = false;
+    double performancePL1W = 0.0;
+    double performancePL2W = 0.0;
     bool validationPassed = false;
     bool autoArm = false;
     int64_t calibratedAt = 0;

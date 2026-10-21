@@ -280,6 +280,47 @@ int main() {
     advance(nearGuard, 0.0, 2.0, 44.0, 79.496, 34.0);
     expectClose(nearGuard.snapshot().recoveryIntervalS, 5.0);
 
+    // Performance profile: fixed targets. Input-power bands stay computed for
+    // telemetry, but they must not move the limits - not even in emergency.
+    PolicyConfig performanceConfig = config();
+    performanceConfig.fixedTargets = true;
+    performanceConfig.fixedPL1W = 45.0;
+    performanceConfig.fixedPL2W = 55.0;
+    GovernorPolicy performance(performanceConfig);
+    double performanceTime = advance(performance, 0.0, 2.0, 20.0, 79.496, 5.0);
+    assert(performance.snapshot().fixedTargets);
+    expectClose(performance.snapshot().pl1W, 45.0);
+    expectClose(performance.snapshot().pl2W, 55.0);
+    expectClose(performance.snapshot().desiredPL1W, 45.0);
+    expectClose(performance.snapshot().recoveryIntervalS, 0.0);
+    performanceTime = advance(performance, performanceTime, 3.2, 46.0, 79.496, 40.0);
+    assert(performance.snapshot().band == GovernorBand::Guard);
+    expectClose(performance.snapshot().pl1W, 45.0);
+    expectClose(performance.snapshot().pl2W, 55.0);
+    performanceTime = advance(performance, performanceTime, 0.4, 58.1, 79.496, 40.0);
+    assert(performance.snapshot().band == GovernorBand::Emergency);
+    expectClose(performance.snapshot().pl1W, 45.0);
+    expectClose(performance.snapshot().pl2W, 55.0);
+    assert(!performance.snapshot().nonCPUOverBudget);
+
+    // Targets above the verified ceilings are clamped into bounds.
+    PolicyConfig overflowingConfig = performanceConfig;
+    overflowingConfig.fixedPL1W = 60.0;
+    overflowingConfig.fixedPL2W = 70.0;
+    GovernorPolicy overflowing(overflowingConfig);
+    advance(overflowing, 0.0, 2.0, 20.0, 79.496, 5.0);
+    expectClose(overflowing.snapshot().pl1W, 45.0);
+    expectClose(overflowing.snapshot().pl2W, 55.0);
+
+    // PL2 is never written below PL1, even with inconsistent profile data.
+    PolicyConfig lowPL2Config = performanceConfig;
+    lowPL2Config.fixedPL1W = 44.0;
+    lowPL2Config.fixedPL2W = 40.0;
+    GovernorPolicy lowPL2(lowPL2Config);
+    advance(lowPL2, 0.0, 2.0, 20.0, 79.496, 5.0);
+    expectClose(lowPL2.snapshot().pl1W, 44.0);
+    expectClose(lowPL2.snapshot().pl2W, 44.0);
+
     // Battery-buffered allowance: while SoC sits above the 50% gate the
     // battery covers adapter deficits, so emergency input must not floor the
     // CPU; the limit rides at the cruise target regardless of the non-CPU
@@ -326,6 +367,14 @@ int main() {
     expectClose(unknownBattery.snapshot().desiredPL1W, 5.0);
     expectClose(unknownBattery.snapshot().pl1W, 5.0);
 
-    std::cout << "policy scaling, independent state targets, balanced and aggressive tiers, causal rail alignment, hysteresis, adaptive recovery, and battery-buffered allowance tests passed\n";
+    // Fixed-target performance mode already ignores the input bands, so the
+    // buffered allowance must not change its limits.
+    GovernorPolicy bufferedPerformance(performanceConfig);
+    bufferedPerformance.updateBatteryState(80.0);
+    advance(bufferedPerformance, 0.0, 2.0, 90.0, 79.496, 45.0);
+    expectClose(bufferedPerformance.snapshot().pl1W, 45.0);
+    expectClose(bufferedPerformance.snapshot().pl2W, 55.0);
+
+    std::cout << "policy scaling, independent state targets, balanced and aggressive tiers, causal rail alignment, hysteresis, adaptive recovery, fixed performance targets, and battery-buffered allowance tests passed\n";
     return 0;
 }
