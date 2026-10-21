@@ -483,6 +483,26 @@ void resetPeaks(Peaks *peaks, const turbomactop::Snapshot &status, double freque
     peaks->frequencyMHz = std::max(0.0, frequencyMHz);
 }
 
+void commitFrame(std::ostringstream &output) {
+    const std::string raw = output.str();
+    std::string frame;
+    frame.reserve(raw.size() + 32U);
+    std::size_t position = 0U;
+    for (;;) {
+        const std::size_t newline = raw.find('\n', position);
+        if (newline == std::string::npos) {
+            break;
+        }
+        frame.append(raw, position, newline - position);
+        frame.append(kReset);
+        frame.append("\x1b[K\n");
+        position = newline + 1U;
+    }
+    frame.append(raw, position, raw.size() - position);
+    frame.append("\x1b[0J");
+    std::cout << frame << std::flush;
+}
+
 void render(
     unsigned columns,
     unsigned rows,
@@ -502,15 +522,21 @@ void render(
     const std::string &lastControl,
     double now
 ) {
+    // In-place update on the alternate screen: the full clear happens once
+    // when the session starts (TerminalSession), never per frame. Homing the
+    // cursor and overwriting, with erase-to-end-of-line ahead of every
+    // newline and one clear-to-end-of-screen after the final line, keeps a
+    // shrinking frame from leaving stale rows without ever re-clearing
+    // enough of the buffer to cause scroll artifacts.
     std::ostringstream output;
-    output << "\x1b[H\x1b[2J";
+    output << "\x1b[H";
     if (columns < 88U || rows < 26U) {
         output << kBgRed << kBold
                << " TURBOMACTOP REQUIRES AT LEAST 88 x 26 " << kReset << "\n"
                << "Current terminal: " << columns << " x " << rows << "\n"
                << "Resize the terminal. q quits; load remains "
                << (stress.running() ? "ACTIVE" : "stopped") << ".\n";
-        std::cout << output.str() << std::flush;
+        commitFrame(output);
         return;
     }
 
@@ -626,7 +652,7 @@ void render(
     }
     output << "\n";
 
-    std::cout << output.str() << std::flush;
+    commitFrame(output);
 }
 
 void usage(const char *program) {
