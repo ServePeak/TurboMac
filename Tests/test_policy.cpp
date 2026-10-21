@@ -280,6 +280,52 @@ int main() {
     advance(nearGuard, 0.0, 2.0, 44.0, 79.496, 34.0);
     expectClose(nearGuard.snapshot().recoveryIntervalS, 5.0);
 
-    std::cout << "policy scaling, independent state targets, balanced and aggressive tiers, causal rail alignment, hysteresis, and adaptive recovery tests passed\n";
+    // Battery-buffered allowance: while SoC sits above the 50% gate the
+    // battery covers adapter deficits, so emergency input must not floor the
+    // CPU; the limit rides at the cruise target regardless of the non-CPU
+    // estimate, and stays inside the verified ceilings.
+    GovernorPolicy buffered(config());
+    buffered.updateBatteryState(64.0);
+    double bufferedTime = advance(buffered, 0.0, 2.0, 20.0, 79.496, 5.0);
+    assert(buffered.snapshot().batteryBuffered);
+    expectClose(buffered.snapshot().batteryPercent, 64.0);
+    bufferedTime = advance(buffered, bufferedTime, 0.4, 90.0, 79.496, 45.0);
+    assert(buffered.snapshot().band == GovernorBand::Emergency);
+    expectClose(buffered.snapshot().stateTargetW, 43.0);
+    expectClose(buffered.snapshot().desiredPL1W, 43.0);
+    expectClose(buffered.snapshot().pl1W, 43.0);
+    expectClose(buffered.snapshot().pl2W, 47.0);
+    assert(!buffered.snapshot().nonCPUOverBudget);
+
+    // Dropping to the 50% gate hands authority straight back to the input
+    // bands: the CPU lands on the emergency floor immediately.
+    bufferedTime = advance(buffered, bufferedTime, 0.2, 90.0, 79.496, 45.0);
+    buffered.updateBatteryState(49.9);
+    bufferedTime = advance(buffered, bufferedTime, 0.1, 90.0, 79.496, 45.0);
+    assert(!buffered.snapshot().batteryBuffered);
+    expectClose(buffered.snapshot().desiredPL1W, 5.0);
+    expectClose(buffered.snapshot().pl1W, 5.0);
+
+    // Above the gate again, the allowance returns without waiting out the
+    // recovery ramp, and it is clamped by the profile ceiling.
+    buffered.updateBatteryState(51.0);
+    bufferedTime = advance(buffered, bufferedTime, 0.1, 90.0, 79.496, 45.0);
+    assert(buffered.snapshot().batteryBuffered);
+    expectClose(buffered.snapshot().pl1W, 43.0);
+
+    // An unknown/invalid reading disables buffering: desired/freezes revert
+    // to the normal emergency path with the floor limit.
+    GovernorPolicy unknownBattery(config());
+    unknownBattery.updateBatteryState(60.0);
+    double unknownTime = advance(unknownBattery, 0.0, 2.0, 20.0, 79.496, 5.0);
+    assert(unknownBattery.snapshot().batteryBuffered);
+    unknownBattery.updateBatteryState(NAN);
+    unknownTime = advance(unknownBattery, unknownTime, 0.2, 90.0, 79.496, 45.0);
+    assert(!unknownBattery.snapshot().batteryBuffered);
+    assert(unknownBattery.snapshot().band == GovernorBand::Emergency);
+    expectClose(unknownBattery.snapshot().desiredPL1W, 5.0);
+    expectClose(unknownBattery.snapshot().pl1W, 5.0);
+
+    std::cout << "policy scaling, independent state targets, balanced and aggressive tiers, causal rail alignment, hysteresis, adaptive recovery, and battery-buffered allowance tests passed\n";
     return 0;
 }

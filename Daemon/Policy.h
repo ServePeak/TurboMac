@@ -47,6 +47,8 @@ struct PolicySnapshot {
     double pl1W = 0.0;
     double pl2W = 0.0;
     double recoveryIntervalS = 5.0;
+    double batteryPercent = -1.0;
+    bool batteryBuffered = false;
     bool nonCPUOverBudget = false;
     bool ready = false;
 };
@@ -56,11 +58,15 @@ public:
     static constexpr double kGuardRatio = 0.5661;
     static constexpr double kShedRatio = 0.6541;
     static constexpr double kEmergencyRatio = 0.7296;
+    // Below this state of charge the battery stops covering adapter deficits
+    // and the normal input-power bands regain authority over the CPU limits.
+    static constexpr double kBatteryBufferSOCPercent = 50.0;
 
     explicit GovernorPolicy(const PolicyConfig &config = {});
     void reset(const PolicyConfig &config);
     bool updateSMC(double nowSeconds, double inputW, double capacityW);
     bool updatePackagePower(double nowSeconds, double packageW);
+    void updateBatteryState(double percent);
     PolicySnapshot evaluate(double nowSeconds);
     const PolicySnapshot &snapshot() const;
     static const char *bandName(GovernorBand band);
@@ -102,6 +108,7 @@ private:
     double belowGuardSince_;
     double belowCruiseSince_;
     double lastIncreaseTime_;
+    double batteryPercent_;
     bool nonCPUInitialized_;
     bool limitInitialized_;
 };

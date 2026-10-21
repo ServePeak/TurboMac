@@ -47,6 +47,7 @@ void GovernorPolicy::reset(const PolicyConfig &config) {
     belowGuardSince_ = kUnset;
     belowCruiseSince_ = kUnset;
     lastIncreaseTime_ = kUnset;
+    batteryPercent_ = -1.0;
     nonCPUInitialized_ = false;
     limitInitialized_ = false;
 }
@@ -69,6 +70,16 @@ bool GovernorPolicy::updateSMC(double nowSeconds, double inputW, double capacity
     return true;
 }
 
+void GovernorPolicy::updateBatteryState(double percent) {
+    // An unknown state of charge must fail safe: buffering only actuates
+    // while a plausible percentage is available.
+    if (!std::isfinite(percent) || percent < 0.0 || percent > 100.0) {
+        batteryPercent_ = -1.0;
+        return;
+    }
+    batteryPercent_ = percent;
+}
+
 bool GovernorPolicy::updatePackagePower(double nowSeconds, double packageW) {
     if (!std::isfinite(nowSeconds)
         || nowSeconds < 0.0
@@ -89,6 +100,8 @@ PolicySnapshot GovernorPolicy::evaluate(double nowSeconds) {
     }
     expireSamples(nowSeconds);
     updateThresholds();
+    snapshot_.batteryPercent = batteryPercent_;
+    snapshot_.batteryBuffered = batteryPercent_ > kBatteryBufferSOCPercent;
     snapshot_.filteredInputW = filteredInput();
     snapshot_.filteredPackageW = filteredPackage(nowSeconds);
     snapshot_.alignedPackageW = alignedPackage(nowSeconds);
@@ -291,6 +304,31 @@ void GovernorPolicy::updateBand(double now) {
 }
 
 void GovernorPolicy::updateLimits(double now) {
+    // Battery-buffered allowance (operator request). While the battery is
+    // above the 50% state-of-charge gate, it covers adapter deficits, so the
+    // CPU limit tracks the cruise target without subtracting the non-CPU
+    // estimate: total demand may exceed the DC input rail. Bands stay
+    // computed as honest telemetry, live PL stays inside the verified
+    // ceilings, and any unknown/invalid battery reading disables the mode.
+    if (snapshot_.batteryBuffered) {
+        snapshot_.stateTargetW = clampValue(
+            config_.cruiseTargetRatio * snapshot_.capacityW - config_.reserveW,
+            config_.raplFloorW,
+            config_.raplCeilingPL1W
+        );
+        snapshot_.desiredPL1W = snapshot_.stateTargetW;
+        snapshot_.pl1W = snapshot_.stateTargetW;
+        snapshot_.pl2W = clampValue(
+            snapshot_.pl1W + std::max(0.0, config_.cruisePL2BurstW),
+            snapshot_.pl1W,
+            config_.raplCeilingPL2W
+        );
+        snapshot_.recoveryIntervalS = 0.0;
+        limitInitialized_ = true;
+        lastIncreaseTime_ = now;
+        return;
+    }
+
     snapshot_.stateTargetW = targetForBand();
     double desiredPL1 = snapshot_.stateTargetW - snapshot_.nonCPUW - config_.reserveW;
     desiredPL1 = clampValue(desiredPL1, config_.raplFloorW, config_.raplCeilingPL1W);

@@ -9,6 +9,10 @@
 #include "../Shared/HWPCodec.h"
 #include "../Shared/RAPLCodec.h"
 
+#include <IOKit/ps/IOPSKeys.h>
+#include <IOKit/ps/IOPowerSources.h>
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cmath>
@@ -44,6 +48,7 @@ constexpr double kRAPLSampleInterval = 0.1;
 constexpr double kRAPLFallbackInterval = 1.0;
 constexpr double kSMCFastInterval = 0.25;
 constexpr double kSMCFallbackInterval = 1.0;
+constexpr double kBatterySampleInterval = 1.0;
 constexpr uint32_t kTelemetryRecoverySamples = 20U;
 constexpr double kAutoArmTelemetrySeconds = 10.0;
 constexpr double kHardCalibrationInputW = 52.0;
@@ -82,6 +87,61 @@ std::string utcTimestamp() {
         now.tv_nsec / 1000000L
     );
     return buffer;
+}
+
+// State of charge of the internal battery in percent, or -1.0 when no
+// plausible reading exists. Fail-safe sources: IOPowerSources is the
+// documented macOS interface, and any absent/garbled dictionary leaves
+// the buffered allowance disabled in the policy.
+double readBatteryPercent() {
+    CFTypeRef info = IOPSCopyPowerSourcesInfo();
+    if (info == nullptr) {
+        return -1.0;
+    }
+    double result = -1.0;
+    CFArrayRef sources = IOPSCopyPowerSourcesList(info);
+    if (sources != nullptr) {
+        const CFIndex count = CFArrayGetCount(sources);
+        for (CFIndex index = 0; index < count; ++index) {
+            const CFTypeRef source = CFArrayGetValueAtIndex(sources, index);
+            const CFDictionaryRef description =
+                IOPSGetPowerSourceDescription(info, source);
+            if (description == nullptr) {
+                continue;
+            }
+            const CFTypeRef type =
+                CFDictionaryGetValue(description, CFSTR(kIOPSTypeKey));
+            if (type == nullptr
+                || CFGetTypeID(type) != CFStringGetTypeID()
+                || CFStringCompare(
+                    (CFStringRef)type,
+                    CFSTR(kIOPSInternalBatteryType),
+                    0
+                ) != kCFCompareEqualTo) {
+                continue;
+            }
+            const CFTypeRef capacity = CFDictionaryGetValue(
+                description,
+                CFSTR(kIOPSCurrentCapacityKey)
+            );
+            double percent = -1.0;
+            if (capacity != nullptr
+                && CFGetTypeID(capacity) == CFNumberGetTypeID()
+                && CFNumberGetValue(
+                    (CFNumberRef)capacity,
+                    kCFNumberDoubleType,
+                    &percent
+                )
+                && percent >= 0.0
+                && percent <= 100.0) {
+                result = percent;
+            }
+            break;
+        }
+        CFRelease(sources);
+    }
+    CFRelease(info);
+    return result;
 }
 
 std::string jsonEscape(const std::string &input) {
@@ -275,7 +335,8 @@ public:
     TurboMacDaemon()
         : smcOpen_(false), policy_(PolicyConfig{}), profileValid_(false),
           armed_(false), operationActive_(false), listenFD_(-1),
-          nextRAPLTime_(0.0), nextSMCTime_(0.0), lastTelemetryLogTime_(0.0),
+          nextRAPLTime_(0.0), nextSMCTime_(0.0), nextBatteryTime_(0.0),
+          batteryPercent_(-1.0), lastTelemetryLogTime_(0.0),
           lastDriverUpdateTime_(0.0), validTelemetrySince_(-1.0),
           latestTemperatureC_(NAN), latestCPUDieTemperatureC_(NAN),
           lastCPUDieReadTime_(-1.0), latestCapacityW_(0.0), latestInputW_(0.0),
@@ -521,8 +582,17 @@ private:
         return true;
     }
 
+    void sampleBattery(double now) {
+        if (now >= nextBatteryTime_) {
+            batteryPercent_ = readBatteryPercent();
+            nextBatteryTime_ = now + kBatterySampleInterval;
+        }
+        policy_.updateBatteryState(batteryPercent_);
+    }
+
     void tick(bool applyControl, bool allowAutoArm) {
         const double now = monotonicSeconds();
+        sampleBattery(now);
         if (now >= nextRAPLTime_) {
             sampleRAPL(now);
         }
@@ -1011,6 +1081,14 @@ private:
         output << ",\"non_cpu_over_budget\":"
                << (snapshot.nonCPUOverBudget ? "true" : "false")
                << ",\"smc_invalid_consecutive\":" << smcFailures_
+               << ",\"battery_percent\":";
+        if (snapshot.batteryPercent >= 0.0) {
+            output << snapshot.batteryPercent;
+        } else {
+            output << "null";
+        }
+        output << ",\"battery_buffered\":"
+               << (snapshot.batteryBuffered ? "true" : "false")
                << ",\"apple_guard_enabled\":"
                << (statusCapabilitiesValid
                     && (statusCapabilities.flags & kTurboMacCapabilityBidirProchotEnabled) != 0U
@@ -1153,6 +1231,15 @@ private:
                 maximumEffectiveMaximum = std::max(maximumEffectiveMaximum, effective);
             }
         }
+        std::ostringstream batteryLine;
+        if (snapshot.batteryPercent >= 0.0) {
+            batteryLine << snapshot.batteryPercent << " %";
+        } else {
+            batteryLine << "unavailable";
+        }
+        if (snapshot.batteryBuffered) {
+            batteryLine << " (buffered: battery covers adapter deficit)";
+        }
         std::ostringstream output;
         output << std::fixed << std::setprecision(2)
                << "Governor: " << (armed_ ? "armed" : "passive") << "\n"
@@ -1173,6 +1260,7 @@ private:
                << snapshot.predictedInputW << " W\n"
                << "Bands guard/shed/emergency: " << snapshot.guardW << " / "
                << snapshot.shedW << " / " << snapshot.emergencyW << " W\n"
+               << "Battery: " << batteryLine.str() << "\n"
                << "Desired/requested PL1 / PL2: " << snapshot.desiredPL1W << " / "
                << snapshot.pl1W << " / " << snapshot.pl2W << " W\n"
                << "PL1 recovery interval: " << snapshot.recoveryIntervalS << " s\n"
@@ -1905,6 +1993,8 @@ private:
     int listenFD_;
     double nextRAPLTime_;
     double nextSMCTime_;
+    double nextBatteryTime_;
+    double batteryPercent_;
     double lastTelemetryLogTime_;
     double lastDriverUpdateTime_;
     double validTelemetrySince_;
