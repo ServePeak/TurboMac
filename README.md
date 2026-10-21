@@ -1,10 +1,13 @@
 # TurboMac Dynamic RAPL Governor
 
 This fork replaces TurboMac's one-shot HWP and XOR writes with a passive-first,
-package-scoped Intel RAPL governor and an explicit, boot-scoped HWP transition.
-It was designed specifically for a
-2017 MacBook Pro 14,3 with an Intel Core i7-7820HQ, no battery, and a USB-C
-input-power failure mode.
+package-scoped Intel RAPL governor and an explicit, boot-scoped HWP switchover.
+It is adapted for a 2018 MacBook Pro 15 (MacBookPro15,1): Intel Core
+i7-8750H, Radeon Pro 555X, stock 87 W USB-C adapter, battery installed, so a
+USB-C input-power deficit is buffered by the battery instead of dropping the
+power. The upstream `parhamfa/TurboMac` line targeted a 2017 MacBook Pro 14,3
+(i7-7820HQ, no battery). Both CPUs are Intel family 6, model `0x9E`, 45 W
+class, and the RAPL and HWP handling is the same.
 
 This is not a general-purpose thermal utility. The KEXT refuses to arm on a CPU
 family/model other than Intel family 6, model `0x9e`. The daemon additionally
@@ -54,6 +57,39 @@ guard or shed. The supervised aggressive profile for this host instead uses
 floor for emergency. Profile validation requires ordered thresholds, ordered
 targets no higher than guard, and at least 5% ACPW below negotiated capacity at
 the emergency boundary.
+
+## Battery-buffered allowance
+
+While the battery sits above 50% state of charge and the governor is armed, the
+battery absorbs adapter deficits by design, so the input-power bands do not
+cut the CPU limit. Desired PL1 rides at the profile's cruise target minus the
+calibrated reserve, without subtracting the non-CPU estimate, and total demand
+can exceed the DC input rail. The bands keep reporting as telemetry, the live
+limit never goes above the verified ceilings, and the mode fails safe: an
+unknown, invalid or missing reading, or a state of charge of 50% or less, hands
+authority back to the normal bands right away. The daemon refreshes the reading
+once per second from IOPowerSources and reports `battery_percent` and
+`battery_buffered` in status. This is operator-approved spending of battery
+capacity. Deep cycling near the gate wears the battery faster, and the
+allowance does not make overdraw safe; it only makes the battery the deficit's
+first victim.
+
+## Performance mode
+
+A schema-3 profile replaces the input-power bands with fixed RAPL targets. The
+profile carries `performance_mode`, `performance_pl1_w` and `performance_pl2_w`,
+and the daemon holds PL1 and PL2 at those values, clamped to the ceilings
+captured from Apple firmware. The bands keep running as advisory telemetry,
+but they no longer move a limit: on this host the adapter budget is not a CPU
+limit, because the battery absorbs the difference. PL2 is never installed below
+PL1.
+
+Validation refuses targets below the calibrated RAPL floor, above the captured
+ceilings, or with PL2 under PL1, and it refuses `auto_arm` outright: a
+performance hand-off is supervised, never automatic. `turbomacctl status`
+reports the active loop as `policy_mode`, either `performance` or
+`input_governed`. The audit of this host, the staged rollout and the rollback
+path are in [PERFORMANCE.md](PERFORMANCE.md).
 
 The daemon samples package energy at 10 Hz and AppleSMC `PDTR`/`ACPW` at 4 Hz.
 It estimates non-CPU input from filtered input minus the one-second median CPU
@@ -126,7 +162,10 @@ verified 5 W HWP bootstrap stage.
 experiments. It reads the protected daemon status socket, samples real CPU MHz
 through `powermetrics`, and displays total input, adapter capacity, package and
 estimated non-CPU power, temperature, governor band, PL1/PL2, HWP/guard health,
-headroom, session peaks, transitions, and a 60-second input-power trend.
+headroom, session peaks, transitions, and a 60-second input-power trend. The
+dashboard redraws in place on the alternate screen. It homes the cursor and
+overwrites every line instead of clearing the terminal on each frame, so a
+shrinking frame no longer leaves stale rows behind.
 
 Run it in a terminal on the governed Mac:
 
@@ -147,7 +186,8 @@ There is deliberately no automatic watt, temperature, telemetry, or governor-
 state cutoff. Amber/red cockpit annunciators and the terminal bell are warnings
 only; the selected load continues until the operator stops it or the process is
 terminated. At 100% x 8 the workload continuously drives all logical CPUs with
-AVX2/FMA and can cause abrupt power loss on the batteryless target. Save work
+AVX2/FMA and on a batteryless machine they can cause abrupt power loss; on this
+machine (battery installed) the battery buffers such deficits. Save work
 before testing and do not mistake a surviving run for proof of a safe input
 boundary.
 
@@ -165,8 +205,9 @@ target it also runs `kmutil print-diagnostics -z` for this explicitly
 SIP-disabled, ad-hoc-signed installation. Tests cover RAPL encoding, HWP field
 preservation and package/local source selection, 32-bit energy wraparound,
 malformed requests, watchdog timing, profile policy bounds, controller scaling,
-independent state targets, transitions, hysteresis, slew limiting, and both the
-balanced and aggressive paths.
+independent state targets, transitions, hysteresis, slew limiting, the fixed
+performance targets of a schema-3 profile, the battery-buffered allowance and
+its hand-back at the 50% gate, and both the balanced and aggressive paths.
 
 Historical observer logs can be replayed without actuation:
 
@@ -243,8 +284,18 @@ unprivileged account before running two eight-thread CPU-only transcriptions.
 Keep an independent observer running during rollout. Do not treat a completed
 calibration or a surviving excursion as proof of a universal shutdown boundary.
 
+## Linux port
+
+The same host runs a second implementation under Ubuntu Server, in `linux/`:
+`turbomacd` and `turbomacctl` in stdlib-only Python, and `turbomactop` as a
+Textual TUI. It carries the rollout plan, the fan floor, the incident log and
+the validation receipts of the reference machine, plus the phase-by-phase plan
+for bringing it up. See [linux/README.md](linux/README.md).
+
 ## License and provenance
 
-Forked from [mndhvn/TurboMac](https://github.com/mndhvn/TurboMac). Original work
-copyright Marko Calasan, 2022. Modifications are distributed under the GNU GPL
-v3.0; see `LICENSE`. There is no warranty.
+Forked from [mndhvn/TurboMac](https://github.com/mndhvn/TurboMac) through
+[parhamfa/TurboMac](https://github.com/parhamfa/TurboMac), which replaced the
+one-shot writes with the passive-first RAPL governor described here. Original
+work copyright Marko Calasan, 2022. Modifications are distributed under the GNU
+GPL v3.0; see `LICENSE`. There is no warranty.
