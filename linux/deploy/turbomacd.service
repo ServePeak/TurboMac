@@ -10,7 +10,8 @@ Type=notify
 NotifyAccess=main
 Environment=PYTHONPATH=/opt/turbomac/src PYTHONUNBUFFERED=1
 # The static cap is (re)applied by shell before Python starts and after it exits:
-# a crash can only ever leave the static cap in place, never the firmware 100 W.
+# a crash can only ever leave the static cap in place, never the firmware values
+# (PL1 45 W / PL2 56 W on this i7-8750H, restored by rollback.sh).
 ExecStartPre=/opt/turbomac/bin/turbomac-cap.sh apply
 ExecStart=/usr/bin/python3 -m turbomac.daemon
 ExecStop=/usr/bin/python3 -m turbomac.cap mark-clean

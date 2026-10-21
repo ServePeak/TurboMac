@@ -1,5 +1,5 @@
 #!/bin/sh
-# TurboMac installer for old-mac (MacBookPro14,3, Ubuntu Server). Idempotent.
+# TurboMac installer for jia-mac-pro (MacBookPro15,1, i7-8750H, Ubuntu Server). Idempotent.
 # Usage: sudo sh deploy/install.sh [--force] [--firmware-limits FILE]
 #   --firmware-limits FILE  pre-seed /var/lib/turbomac/firmware-limits.json (if absent) with
 #                           known-true firmware values, for a machine with a manual cap active
@@ -20,7 +20,7 @@ done
 
 [ "$(id -u)" -eq 0 ] || { echo "install.sh: must run as root" >&2; exit 1; }
 
-EXPECTED="Intel(R) Core(TM) i7-7820HQ"
+EXPECTED="Intel(R) Core(TM) i7-8750H"
 MODEL=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -n 1)
 case "$MODEL" in
     *"$EXPECTED"*) ;;
@@ -37,7 +37,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(dirname "$HERE")
 PREFIX=/opt/turbomac
 PY=/usr/bin/python3
-OWNER=${TURBOMAC_USER:-parham}
+OWNER=${TURBOMAC_USER:-jia}
 
 [ -x "$PY" ] || { echo "install.sh: $PY not found" >&2; exit 1; }
 "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \

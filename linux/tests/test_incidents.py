@@ -7,7 +7,7 @@ from turbomac.daemon import incidents
 from turbomac.daemon.logger import SampleLogger
 from turbomac.daemon.paths import Paths
 
-ABRUPT_TAIL = "\n".join(f"Oct 05 03:1{i % 10} old-mac kernel: line {i}" for i in range(25))
+ABRUPT_TAIL = "\n".join(f"Oct 05 03:1{i % 10} jia-mac-pro kernel: line {i}" for i in range(25))
 CLEAN_TAIL = "systemd[1]: Reached target poweroff.target.\nsystemd-shutdown[1]: Syncing filesystems\nsystemd-journald[412]: Journal stopped\n"
 BOOTS = json.dumps([{"index": -1, "boot_id": "prevboot0123456789", "first_entry": 1, "last_entry": 2},
                     {"index": 0, "boot_id": "cur-boot-0000", "first_entry": 3, "last_entry": 4}])

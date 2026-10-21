@@ -5,7 +5,7 @@ a JSON summary. Reads nothing from sysfs itself (the daemon owns the SMC
 selector); everything comes from the control socket.
 
   phase3_run.py --label cap40 --stress 8 --seconds 30 --json cap40.json
-  phase3_run.py --label whisper --seconds 600 --json w.json -- sudo -u parham whisper-cli -t 8 ...
+  phase3_run.py --label whisper --seconds 600 --json w.json -- sudo -u jia whisper-cli -t 8 ...
 """
 from __future__ import annotations
 

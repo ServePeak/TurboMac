@@ -1,8 +1,13 @@
 # TurboMac for Linux
 
-Power governor and telemetry for old-mac, a batteryless 2017 MacBook Pro 14,3
-(i7-7820HQ, Radeon Pro 560, 80 W-class adapter) running Ubuntu Server. Design
-and rationale: [PLAN.md](PLAN.md).
+Power governor and telemetry for jia-mac-pro, a 2018 MacBook Pro 15
+(MacBookPro15,1: i7-8750H, Radeon Pro 555X, stock 87 W USB-C adapter, battery
+installed) running Ubuntu Server. Design and rationale: [PLAN.md](PLAN.md).
+
+This tree is derived from the upstream `parhamfa/TurboMac` line, built for a
+batteryless 2017 MacBook Pro 14,3 (i7-7820HQ). That machine's validation runs
+live in `linux/receipts/` as reference data (this machine has the same fan
+hardware: 2160 rpm minimums, 5927/5489 rpm maximums, and a 45 W-class CPU).
 
 | Piece | What it does |
 |---|---|
@@ -11,7 +16,7 @@ and rationale: [PLAN.md](PLAN.md).
 | `turbomacctl` | CLI over the socket, for users in group `turbomac` |
 | `turbomactop` | full-screen TUI over the socket (Textual, own venv): dashboard, settings, GPU mode, incidents, event log |
 
-The daemon and CLI use only the Python standard library (Python 3.10+, 3.14 on old-mac).
+The daemon and CLI use only the Python standard library (Python 3.10+, 3.14 on jia-mac-pro).
 `turbomactop` needs Textual, pinned in `requirements-tui.txt` and installed into its own venv.
 
 ## Install
@@ -19,14 +24,14 @@ The daemon and CLI use only the Python standard library (Python 3.10+, 3.14 on o
 From the Mac:
 
 ```sh
-rsync -a --delete linux/ old-mac:/tmp/turbomac-src/
-ssh old-mac 'sudo sh /tmp/turbomac-src/deploy/install.sh'
+rsync -a --delete linux/ jia-mac-pro:/tmp/turbomac-src/
+ssh jia-mac-pro 'sudo sh /tmp/turbomac-src/deploy/install.sh'
 ```
 
 `install.sh` is idempotent and refuses to run unless the CPU is an
-`Intel(R) Core(TM) i7-7820HQ` (`--force` overrides). It copies `turbomac/` to
+`Intel(R) Core(TM) i7-8750H` (`--force` overrides). It copies `turbomac/` to
 `/opt/turbomac/src`, writes `/opt/turbomac/bin/{turbomacd,turbomacctl,turbomac-cap.sh}`
-(symlinked into `/usr/local/bin`), creates group `turbomac` and adds `parham`,
+(symlinked into `/usr/local/bin`), creates group `turbomac` and adds `jia`,
 loads `msr` and `intel_rapl_msr` (and persists them in `/etc/modules-load.d`),
 writes `/etc/turbomac/config.json` from defaults if absent, captures the
 firmware RAPL limits, installs the units, masks `thermald`, enables and starts
@@ -45,18 +50,18 @@ sudo sh deploy/install.sh --firmware-limits /path/to/firmware-limits.json
 The file must be JSON with numeric `pl1_w`, `pl2_w`, `pl1_uw`, `pl2_uw` (other
 keys are kept); the installer refuses anything else. It is copied (mode 0644)
 before the capture step and only if `/var/lib/turbomac/firmware-limits.json`
-does not exist yet. For this machine the verified firmware values are:
+does not exist yet. On this i7-8750H the best-known firmware values are PL1 45 W / PL2 56 W
+(the stock MBP15,1 configuration; verify at first boot - the installer captures
+the true values before TurboMac writes anything):
 
 ```json
-{"pl1_w": 100.0, "pl2_w": 125.0, "pl1_uw": 100000000, "pl2_uw": 125000000,
- "pl1_window_us": 27983872, "pl2_window_us": 2440, "enabled": 1}
+{"pl1_w": 45.0, "pl2_w": 56.0, "pl1_uw": 45000000, "pl2_uw": 56000000, "enabled": 1}
 ```
 
 Without a seed, a live capture with PL1 below 45 W (a cap is already active) is
 never saved and never used as a clamp: the daemon clamps to 45 W only and warns,
-and the next boot captures the true values before the cap service writes. A
-saved file marked `suspect` or with non-numeric limits is treated as missing,
-and `rollback.sh` ignores it in favour of 100 W / 125 W.
+and the next boot captures the true values before the cap service writes.A saved file marked `suspect` or with non-numeric limits is treated as missing,
+and `rollback.sh` ignores it in favour of 45 W / 56 W.
 
 ## Verify
 
@@ -87,7 +92,9 @@ cleanly.
   a readback mismatch or a write error means FALLBACK to the static cap (never
   above the limit already in force), retried with 1/2/4/8 s backoff; the
   emergency rule keeps working while it waits. Limits are rounded down to the
-  1/8 W RAPL unit before writing. ACPW outside 30..100 W counts as invalid.
+  1/8 W RAPL unit before writing. ACPW outside 30..100 W counts as invalid
+(on this machine that also means running on the battery alone - adapter
+unplugged - which FALLBACKs to the static cap; expected and safe).
   Thermal trim: while the package is at or above `thermal_trim_c` (97 °C) the
   effective ceiling steps down 1 W per 3 s from the current PL1 (not below
   the floor); below `thermal_recover_c` (92 °C) it steps back up to
@@ -127,10 +134,13 @@ own fan curve respects) when the CPU is working hard, and lowers it again when
 it cools down. The SMC stays in automatic control; TurboMac never writes
 `fan*_manual` or `fan*_output`.
 
-Why: the SMC curve lags the load by 20-30 s. In the Phase 3 runs a sustained
-40 W package reached the CPU's 97-100 °C limit in about 30 s while the fans were
-still at ~3,900 of 5,927 rpm (`receipts/phase3-20261010/README.md`), so the
-hardware throttled. The floor spins the fans up as soon as the power arrives.
+Why: the SMC curve lags the load by 20-30 s. In the Phase 3 runs on the reference
+machine (the batteryless MacBookPro14,3 - these receipts live in
+`linux/receipts/`), a sustained 40 W package reached the CPU's
+97-100 °C limit in about 30 s while the fans were still at ~3,900 of 5,927 rpm,
+so the hardware throttled. The floor spins the fans up as soon as the power
+arrives; the fan floor thresholds below were carried across because this machine
+has the same fan hardware. Phase 0 on this machine should confirm them.
 
 How (once a second, from the daemon's 1 Hz tick, after the governor step):
 
@@ -190,7 +200,7 @@ carries on; a failed pip install is a warning, never an install failure. The
 daemon never uses the venv. `rollback.sh --purge` removes it.
 
 ```sh
-ssh -t old-mac turbomactop                      # live, as parham (log in again after install for the group)
+ssh -t jia-mac-pro turbomactop                      # live, as jia (log in again after install for the group)
 turbomactop --socket /run/turbomac/turbomacd.sock
 ```
 
@@ -203,7 +213,7 @@ python3 -m venv .venv-tui && .venv-tui/bin/pip install -r requirements-tui.txt
 .venv-tui/bin/python -m turbomac.tui --replay fixtures/samples-oldmac-20261009.jsonl.gz [--speed 10]
 ```
 
-- `--mock`: a deterministic simulation of old-mac (seeded). Idle is about 21 W
+- `--mock`: a deterministic simulation of jia-mac-pro (seeded). Idle is about 21 W
   input / 6 W package / 7 W GPU; every 120 s an 8-thread "whisper" burst holds
   the package at PL1 (about 56-58 W input at 35 W), and every other burst also
   loads the dGPU to its cap. The daemon's own sampler, governor step, config
@@ -229,9 +239,9 @@ to it). Tabs, fields, radio buttons and table rows are clickable. The layout is
 made for 120x36; below 110 columns the rails, top-processes and 10 min
 sparklines are hidden and the dashboard scrolls (80x24 works).
 
-Screenshots of every screen (mock and replay) are in
-`receipts/phase2-screens/`; regenerate them with
-`.venv-tui/bin/python -m turbomac.tui.screenshots`.
+Screenshots from the reference build are in
+`linux/receipts/phase2-screens/`; regenerate on this machine
+with `.venv-tui/bin/python -m turbomac.tui.screenshots`.
 
 ## Rollback
 
@@ -240,7 +250,7 @@ sudo sh /opt/turbomac/src/deploy/rollback.sh
 ```
 
 Stops and disables both units, unmasks and starts `thermald`, restores the
-captured firmware limits (100 W / 125 W on this machine; a suspect or invalid
+captured firmware limits (45 W / 56 W best-known fallback on this machine; a suspect or invalid
 capture is ignored in favour of those), powers the dGPU back on if needed and
 restores its cap to max with DPM `auto`, and writes the fan minimums back from
 `/var/lib/turbomac/fan-defaults.json` (when that file is missing, or an entry is

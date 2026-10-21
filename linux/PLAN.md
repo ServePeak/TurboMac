@@ -2,7 +2,7 @@
 
 Status: proposal, 2026-10-09. Nothing in this directory is deployed yet.
 
-The macOS KEXT governor in the rest of this repo is dormant: old-mac runs Ubuntu
+The macOS KEXT governor in the rest of this repo is dormant: jia-mac-pro runs Ubuntu
 Server 26.04 now. This plan replaces it with three small Linux pieces that keep
 the TurboMac names:
 
@@ -14,27 +14,34 @@ the TurboMac names:
 
 ## 1. Goal and non-goals
 
-Goal: no more unexpected power losses on old-mac, with the simplest machinery
-that can be verified, plus a cockpit to watch it and tune it.
+Goal: keep the stock 87 W USB-C adapter's power budget respected on jia-mac-pro
+(2018 MacBook Pro 15, MacBookPro15,1 - battery installed, so a transient draw
+over-budget is buffered by the battery, but a sustained one still makes the
+machine misbehave), with the simplest machinery that can be verified, plus a
+cockpit to watch it and tune it. The machine also has battery telemetry (TB0T,
+CHGB) available for a battery-health view later; the macOS KEXT code already
+handles a battery-present machine.
 
 Non-goals: thermal management (hardware handles it at 100 °C), per-process
 scheduling, anything that writes MSRs directly, anything that needs a kernel
 module. Everything goes through sysfs that Linux already exposes to root.
 
-## 2. Facts the design rests on (verified 2026-10-09, read-only)
+## 2. Facts the design rests on (measured on the reference machine 2026-10-09:
+the batteryless MacBookPro14,3; re-verify each on jia-mac-pro in Phase 0 before
+trusting them there)
 
 | Fact | Value | Consequence |
 |---|---|---|
-| Firmware RAPL on Linux | PL1 100 W / 28 s, PL2 125 W / 2.44 ms, unlocked, TDP 45 W | CPU is uncapped today; cap must be re-applied every boot |
+| Firmware RAPL on Linux | best-known PL1 ~45 W / PL2 ~56 W for the stock MBP15,1 firmware - verify at first boot (the 14,3 ran an unlocked 100 W / 125 W / 28 s config) | capture before any TurboMac write; the cap must be re-applied every boot |
 | powercap sysfs | `/sys/class/powercap/intel-rapl:0/constraint_{0,1}_power_limit_uw`, root-writable; subdomains core/uncore/dram exist with energy counters | daemon writes PL1/PL2 directly, no KEXT |
 | MSR access | `/dev/cpu/0/msr` present, `msr` and `intel_rapl_msr` loaded | daemon can read back 0x610 (limits + clamp bits) and 0x1B1 (power-limited-now bits) |
-| Input telemetry | applesmc keys PDTR (input W), ACPW (negotiated W), VD0R (V), ID0R (A) via `key_at_index*`; 911 keys total; no hwmon power attributes | daemon is the single owner of the selector; TUI never touches sysfs |
-| Input model (Ubuntu staircase) | input ≈ 20.9 W + 1.24 × package W (GPU on, firmware fan curve); refit 2026-10-10 with GPU off + fan floor: ≈ 8.0 W + 1.24 × package W | then 35 W cap ≈ 64 W input, 40 W ≈ 71 W, 45 W ≈ 77 W; now 40 W ≈ 57.6 W (measured 55.5 mean / 59.3 1 s peak), 45 W ≈ 63.8 W, 50 W ≈ 70 W |
-| Adapter | ACPW 79.496 W at ~20.2 V ⇒ 4 A contract (80 W class, not the stock 87 W) | hard ceiling; worth checking adapter and cable |
-| dGPU | Radeon Pro 560, always on, 7 W idle, 29 W loaded, drives eDP-1, "Runtime PM not available", hwmon `power1_cap` writable (max 35 W), vga_switcheroo present (`2:DIS:+:Pwr`, `0:IGD: :Pwr`) | cap it; optionally power it off via switcheroo |
-| cpufreq | intel_pstate active, HWP on, EPP balance_performance, turbo on | leave alone by default; expose as settings |
+| Input telemetry | applesmc keys PDTR (input W), ACPW (negotiated W), VD0R (V), ID0R (A) via `key_at_index*`; key count and attribute names to confirm with the probe (911 keys on the 14,3); no hwmon power attributes | daemon is the single owner of the selector; TUI never touches sysfs |
+| Input model | reference calibration: about 20.9 W + 1.24 x package W (GPU on, firmware fan curve; with GPU off + fan floor, about 8.0 W + 1.24 x package W) | re-fit on jia-mac-pro in Phase 0; then 35 W cap, 40 W, 45 W can be predicted against the bands |
+| Adapter | stock Apple 87 W USB-C (SendoD1in reads "87W USB-C Power Adapter"); ACPW should report ~87 W negotiated - verify with the probe. A battery buffers transient over-draw the 14,3 could never buffer | 87 W fits the governor's 30..100 W ACPW sanity window without changes |
+| dGPU | Radeon Pro 555X, always on, idle/loaded draw to measure (the 560 measured 7 W idle / 29 W loaded), drives eDP-1, "Runtime PM not available" expected as well, hwmon `power1_cap` writable (max to check), vga_switcheroo expected (same AMD family) | cap it; optionally power it off via switcheroo |
+| Shutdown classes (reference machine: two Sept 29 tests at 78 W + something; Oct 5 cluster at idle with no whisper/GPU/Docker job activity) | on jia-mac-pro the over-budget shutdown class is buffered by the battery; run Phase 0 before assuming idle-class events to be absent | cap fixes the first; the 1 Hz log is the diagnostic for the second |
+| cpufreq | intel_pstate active, HWP on, EPP balance_performance, turbo on (expected; verify) | leave alone by default; expose as settings |
 | thermald | running, no config, inert, but has rewritten PL1 once | mask it |
-| Shutdown classes | load-driven (two Sept 29 tests at 78 W + something); and the Oct 5 cluster at idle with no whisper/GPU/Docker job activity | cap fixes the first; the 1 Hz log is the diagnostic for the second |
 
 ## 3. Architecture
 
@@ -56,7 +63,7 @@ module. Everything goes through sysfs that Linux already exposes to root.
 
 Rules:
 
-- `turbomacd` is stdlib-only Python (3.14 on old-mac). The safety-critical part
+- `turbomacd` is stdlib-only Python (3.10+) and runs on jia-mac-pro. The safety-critical part
   must not depend on a venv. `turbomactop` uses Textual in its own venv.
 - The static cap is applied by a shell `ExecStartPre` before Python even
   starts, and re-applied by `ExecStopPost`. A Python crash can only ever leave
@@ -184,7 +191,7 @@ on writes `ON` then `DIS`; a reboot always restores the firmware state.
 ### 4.6 Control socket
 
 Path `/run/turbomac/turbomacd.sock`, mode 0660, owner root, group `turbomac`
-(user `parham` is added to it). Newline-delimited JSON.
+(user `jia` is added to it). Newline-delimited JSON.
 
 | Request | Reply |
 |---|---|
@@ -240,15 +247,15 @@ Stack: Python + Textual (Rich under it), in `/opt/turbomac/venv`, pinned
 version. Dark theme, mouse and keyboard, braille sparklines, gradient bars.
 Runs unprivileged; everything comes from the socket. Also runs on the Mac
 against `--mock` (synthetic) or `--replay <jsonl>` (the Sept stress-test logs)
-for development without touching old-mac.
+for development without touching jia-mac-pro.
 
 Screens, switched with `1`–`5`:
 
 ```
-┌ TurboMac · old-mac · Ubuntu 26.04 · up 4d 01:27 · governor DYNAMIC · NORMAL ──────── 16:59:44 ┐
+┌ TurboMac · jia-mac-pro · Ubuntu 26.04 · up 4d 01:27 · governor DYNAMIC · NORMAL ──────── 16:59:44 ┐
 │ INPUT  62.4 W ▕█████████████████████████░░░░░░░░▏ 79.5 W   20.23 V × 3.08 A   headroom 17.1 W │
 │        shed 70.0 ▲    emergency 74.7 ▲      ▂▃▃▅▆▇▇▆▅▅▆▇█▇▆▅▄▃▃▂▂▂▃▄  60 s   peak 71.2 W     │
-├ CPU ───────────────────────────────┬ GPU · Radeon Pro 560 ───────┬ GOVERNOR ─────────────────┤
+├ CPU ───────────────────────────────┬ GPU · Radeon Pro 555X ───────┬ GOVERNOR ─────────────────┤
 │ package 31.9 W   PL1 35 · PL2 35   │ 7.0 W   cap 15 W   AUTO     │ NORMAL  since 00:12:31    │
 │ core 27.1  uncore 1.2  dram 2.6    │ 50 °C   busy 0 %  214 MHz   │ PL1 35 → ceiling 40       │
 │ 3.21 GHz  busy 68 %  61 °C  PL✓    │ rt active · panel: dGPU     │ cuts 3  emerg 0  fallbk 0 │
@@ -309,8 +316,8 @@ linux/
 
 ## 8. Deployment and rollback
 
-Install (from the Mac): `rsync linux/ old-mac:/opt/turbomac/src/`, then on
-old-mac `install.sh`: create group `turbomac`, add `parham`, create
+Install (from the Mac): `rsync linux/ jia-mac-pro:/opt/turbomac/src/`, then on
+jia-mac-pro `install.sh`: create group `turbomac`, add `jia`, create
 `/etc/turbomac`, `/var/lib/turbomac`, venv for the TUI with pinned Textual,
 install units and modules-load, capture firmware limits to
 `/var/lib/turbomac/firmware-limits.json`, mask thermald, `systemctl enable --now
@@ -330,7 +337,7 @@ A reboot also restores every hardware default.
   afterwards.
 - TUI: Textual's pilot tests for screen switching and settings submission
   against the mock backend.
-- On old-mac: Phase 1 runs a day in `off` mode (telemetry + logging only) to
+- On jia-mac-pro: Phase 1 runs a day in `off` mode (telemetry + logging only) to
   compare its numbers against turbostat and the Sept scripts, then `static`.
 
 ## 10. Phases and acceptance
@@ -339,19 +346,18 @@ A reboot also restores every hardware default.
 |---|---|---|
 | 0 | Manual, supervised, 10 min: mask thermald, PL1 = PL2 = 35 W, GPU cap 15 W, verify MSR 0x610 | input under load ≤ ~66 W on a short stress-ng run; nothing else changes |
 | 1 | `turbomacd` + `turbomacctl` + units + installer + tests | a day of clean logs in `off`, then `static`; incident detection verified by a deliberate clean reboot and by reading the Oct 5 boots from the journal |
-| 2 | `turbomactop` dashboard, settings, GPU (auto/low), incidents, log | runs on the Mac in mock/replay and on old-mac unprivileged; a settings change round-trips to disk and to the hardware |
+| 2 | `turbomactop` dashboard, settings, GPU (auto/low), incidents, log | runs on the Mac in mock/replay and on jia-mac-pro unprivileged; a settings change round-trips to disk and to the hardware |
 | 3 | Supervised validation (owner present, SSH open) | staircase under cap; cold-start whisper large-v3 × 8 threads peaks ≤ ~72 W; GPU `off` procedure verified or rejected; then `dynamic` enabled and ceiling set from the data |
 | 4 | Optional: built-in load generator panel (stress-ng wrapper, like the macOS cockpit), Telegram alerts via Hermes on incidents/emergencies, porting the old test scripts to the socket, EPP/turbo experiments | as wanted |
 
 ## 11. Risks and open questions
 
-- The Oct 5 class is not a CPU-power event by the evidence; the cap will not
-  fix it. The incident log is the way to learn what it is. Adapter, cable and
-  mains deserve a look in parallel (an Apple 87 W or 96 W adapter would also
-  lift ACPW).
+- The Oct 5 class (reference machine) was not a CPU-power event by the evidence;
+  the cap will not fix it either way. The incident log is the way to learn what
+  it is here. Adapter, cable and mains still deserve a look in Phase 0.
 - `key_at_index` is a global selector; any other reader corrupts samples. The
   daemon is the only reader; old scripts are retired.
-- vga_switcheroo `OFF` on a 2017 MBP works in community reports but has not
+- vga_switcheroo `OFF` on a 2018 MBP works in community reports but has not
   been tried on this machine. Hence the gating and SSH-only operation.
 - Reading amdgpu hwmon while the device is suspended can wake it; the sampler
   skips the GPU entirely in `off` mode.

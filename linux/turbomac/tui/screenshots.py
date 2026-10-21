@@ -1,7 +1,7 @@
 """Save SVG screenshots of every screen: python -m turbomac.tui.screenshots [OUTDIR]
 
 Mock backend (seed 1, dynamic mode, mid GPU-loaded burst) for screens 1-5 at
-120x36 and the dashboard at 80x24; replay backend (the old-mac fixture) for the
+120x36 and the dashboard at 80x24; replay backend (the jia-mac-pro fixture) for the
 dashboard at 120x36. Default OUTDIR: linux/receipts/phase2-screens.
 """
 from __future__ import annotations

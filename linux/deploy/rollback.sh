@@ -28,8 +28,10 @@ systemctl unmask thermald.service 2>/dev/null || true
 systemctl start thermald.service 2>/dev/null || true
 
 echo "== RAPL limits"
-PL1=100000000
-PL2=125000000
+# best-known firmware limits for the i7-8750H (MacBookPro15,1); a real capture from
+# /var/lib/turbomac/firmware-limits.json (taken before TurboMac wrote anything) always wins.
+PL1=45000000
+PL2=56000000
 # Only a valid, non-suspect capture (numeric, PL1 >= 45 W) is trusted; otherwise the verified defaults.
 VALS=$(/usr/bin/python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
@@ -38,7 +40,7 @@ ok = isinstance(d, dict) and not d.get("suspect") and num(d.get("pl1_uw")) and n
 print("%d %d" % (d["pl1_uw"], d["pl2_uw"]) if ok else "")' "$FW" 2>/dev/null)
 case "$VALS" in
     *[0-9]" "[0-9]*) PL1=${VALS% *}; PL2=${VALS#* } ;;
-    *) echo "WARNING: $FW missing, suspect or invalid; using the verified firmware defaults 100 W / 125 W" ;;
+    *) echo "WARNING: $FW missing, suspect or invalid; using the best-known firmware defaults 45 W / 56 W" ;;
 esac
 echo "$PL1" > "$RAPL/constraint_0_power_limit_uw"
 echo "$PL2" > "$RAPL/constraint_1_power_limit_uw"
@@ -66,7 +68,8 @@ echo "== fans"
 # A clean daemon stop already restores the fan minimums; this also covers a crash that left a floor.
 # fan-defaults.json holds the fan*_min values captured before the daemon ever wrote a floor. Fallback when
 # it is missing, or for an entry that is missing or implausible (more than 500 rpm above the hardware
-# minimum): the verified hardware minimums of this machine, fan1 2160 rpm and fan2 2000 rpm.
+# minimum): the verified hardware minimums of this machine (same as the MacBookPro14,3
+# reference: fan1 2160 rpm, fan2 2000 rpm).
 # Only fan*_min is written; fan*_manual and fan*_output are never touched.
 SMCDIR=$(ls -d /sys/devices/platform/applesmc.* 2>/dev/null | head -n 1)
 if [ -n "$SMCDIR" ]; then

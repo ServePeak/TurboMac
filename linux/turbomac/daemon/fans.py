@@ -26,7 +26,8 @@ from turbomac.daemon.sysfs import read_int, read_text, write_text
 POWER_HYST_W = 5.0          # the power rule releases below power_floor_w - 5 W
 READBACK_TOL_RPM = 50       # the SMC may round what it stores
 RETRY_S = 30.0              # a failed write of the same value is retried at most this often
-KNOWN_HW_MIN = {1: 2160, 2: 2000}   # verified fan1/fan2 hardware minimums on old-mac (MacBookPro14,3)
+KNOWN_HW_MIN = {1: 2160, 2: 2000}   # verified fan1/fan2 hardware minimums on this machine (MacBookPro15,1;
+                                    # measured identical to the MacBookPro14,3 reference: 2160 / 2000 rpm)
 CAPTURE_SLACK_RPM = 500     # a live fan{N}_min this far above KNOWN_HW_MIN means a floor is already applied
 
 

@@ -11,7 +11,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="turbomactop", description="Full-screen TUI for turbomacd (TurboMac)")
     ap.add_argument("--socket", help=f"control socket (default {default_socket()})")
     src = ap.add_mutually_exclusive_group()
-    src.add_argument("--mock", action="store_true", help="simulated old-mac, no daemon needed")
+    src.add_argument("--mock", action="store_true", help="simulated jia-mac-pro, no daemon needed")
     src.add_argument("--replay", metavar="FILE", help="play a turbomacd sample log (.jsonl or .jsonl.gz)")
     ap.add_argument("--seed", type=int, help="mock: random seed (default 1)")
     ap.add_argument("--speed", type=float, help="replay: records per second (default 1)")

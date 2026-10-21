@@ -1,7 +1,7 @@
 """Where turbomactop gets its data: the Backend interface and the live socket backend.
 
 The TUI never touches sysfs, the SMC selector or RAPL. LiveBackend talks to
-turbomacd over the control socket; MockBackend (mock.py) simulates old-mac;
+turbomacd over the control socket; MockBackend (mock.py) simulates jia-mac-pro;
 ReplayBackend (replay.py) plays a turbomacd sample log. All three return the
 shapes of turbomacd's replies (main.Daemon.build_status, dispatch).
 """

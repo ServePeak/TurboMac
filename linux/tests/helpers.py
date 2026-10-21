@@ -47,7 +47,7 @@ def add_amdgpu(root: str) -> tuple[str, str]:
 
 
 def add_applesmc_fans(root: str, mins: tuple[int, int] = (2160, 2000)) -> str:
-    """applesmc.768 with old-mac's two fans (min as given, hardware max 5927 / 5489). Returns the dir."""
+    """applesmc.768 with jia-mac-pro's two fans (min as given, hardware max 5927 / 5489). Returns the dir."""
     base = os.path.join(root, "sys/devices/platform/applesmc.768")
     for n, (label, mn, mx, rpm) in enumerate((("Left side", mins[0], 5927, 2161),
                                                ("Right side", mins[1], 5489, 1999)), start=1):

@@ -1,4 +1,4 @@
-"""MockBackend: a deterministic simulation of old-mac behind turbomacd (no hardware, no socket).
+"""MockBackend: a deterministic simulation of jia-mac-pro behind turbomacd (no hardware, no socket).
 
 Physics (all randomness from random.Random(seed)): idle is ~21 W input with a
 6 W package and a 7 W dGPU. Every 120 s an 8-thread "whisper" burst runs for
@@ -34,10 +34,11 @@ from turbomac.daemon.sampler import EXTRA_SMC_KEYS, Sampler
 from turbomac.tui.backend import BackendError, SimBackend
 
 DT = 0.25
-ACPW_MW = 79496
+ACPW_MW = 87000   # negotiated budget of the stock 87 W USB-C adapter (MacBookPro15,1);
+                  # verify with tools/probe.py before trusting (the 14,3 reference read 79496)
 BURST_PERIOD_S, BURST_START_S, BURST_LEN_S = 120.0, 30.0, 45.0
 FANS = (("Left side", 2160, 5927), ("Right side", 2000, 5489))
-# label, idle value (pkg 61 C / GPU 52 C on old-mac), source (c = package temp, g = GPU temp), gain
+# label, idle value (pkg 61 C / GPU 52 C, mocked), source (c = package temp, g = GPU temp), gain
 SMC_TEMPS = [(f[0], float(f[1]), f[2], float(f[3])) for f in (s.split() for s in """
 TA0V 31.0 c 0.05|TC0E 63.0 c 1.0|TC0F 66.8 c 1.05|TC0P 53.5 c 0.5|TC1C 57.0 c 1.0|TC2C 57.0 c 1.0|TC3C 57.0 c 0.95
 TC4C 58.0 c 1.0|TCGC 57.0 c 0.9|TCSA 57.0 c 0.9|TCTD -0.2 c 0.0|TCXC 58.0 c 1.1|TG0D 56.2 g 1.0|TG0F 56.2 g 1.0
@@ -261,22 +262,22 @@ def make_incidents(rng: random.Random) -> list[dict[str, Any]]:
              float(round(60 + g(0, 0.6)))) for _ in range(60)]
     oct5 = _incident("20261005T091447Z-7c1e2a90", "7c1e2a90-55d3-4b8e-9d0e-2f4c1a6b8e11", _utc(2026, 10, 5, 9, 11, 45), idle,
                      [n_v for n_v in IDLE_PROCS],
-                     ["Oct 05 09:12:01 old-mac systemd[1]: Starting sysstat-collect.service - system activity "
-                      "accounting tool...", "Oct 05 09:12:01 old-mac systemd[1]: sysstat-collect.service: "
-                      "Deactivated successfully.", "Oct 05 09:12:01 old-mac systemd[1]: Finished "
+                     ["Oct 05 09:12:01 jia-mac-pro systemd[1]: Starting sysstat-collect.service - system activity "
+                      "accounting tool...", "Oct 05 09:12:01 jia-mac-pro systemd[1]: sysstat-collect.service: "
+                      "Deactivated successfully.", "Oct 05 09:12:01 jia-mac-pro systemd[1]: Finished "
                       "sysstat-collect.service - system activity accounting tool.",
-                      "Oct 05 09:12:30 old-mac hermes[2485]: heartbeat ok (queue 0)",
-                      "Oct 05 09:12:41 old-mac kernel: applesmc: send_byte(0x00, 0x0300) fail: 0x40"])
+                      "Oct 05 09:12:30 jia-mac-pro hermes[2485]: heartbeat ok (queue 0)",
+                      "Oct 05 09:12:41 jia-mac-pro kernel: applesmc: send_byte(0x00, 0x0300) fail: 0x40"])
     load = []
     for i in range(60):
         inp = min(78.3, 66.0 + 0.21 * i + g(0, 0.4))
         load.append((round(inp, 2), round(min(45.0, 41.0 + 0.07 * i), 2), 7.1, 100.0, "OFF", float(min(99, 92 + i // 8))))
     sep29 = _incident("20260929T184212Z-41d0b7e3", "41d0b7e3-0c2a-4f61-8a55-93b2d7e0c4aa", _utc(2026, 9, 29, 18, 40, 10), load,
                       [("whisper-cli", 788.0), ("stress-ng-vm", 96.0), ("python3", 6.0), ("dockerd", 1.0)],
-                      ["Sep 29 18:40:31 old-mac kernel: mce: CPU2: Package temperature above threshold, cpu clock "
-                       "throttled", "Sep 29 18:40:31 old-mac kernel: mce: CPU2: Core temperature/speed normal",
-                       "Sep 29 18:40:58 old-mac stress-pilot[91822]: step 7 input 77.9 W pkg 44.8 W",
-                       "Sep 29 18:41:09 old-mac stress-pilot[91822]: step 8 input 78.3 W pkg 45.0 W"])
+                      ["Sep 29 18:40:31 jia-mac-pro kernel: mce: CPU2: Package temperature above threshold, cpu clock "
+                       "throttled", "Sep 29 18:40:31 jia-mac-pro kernel: mce: CPU2: Core temperature/speed normal",
+                       "Sep 29 18:40:58 jia-mac-pro stress-pilot[91822]: step 7 input 77.9 W pkg 44.8 W",
+                       "Sep 29 18:41:09 jia-mac-pro stress-pilot[91822]: step 8 input 78.3 W pkg 45.0 W"])
     return [oct5, sep29]
 
 
@@ -393,7 +394,7 @@ class MockBackend(SimBackend):
         with self.lock:
             if self._snapshot is None:
                 st = Daemon.build_status(self, self.mono0 + self.t)  # type: ignore[arg-type]
-                st.update(ts=round(self.wall(), 3), host="old-mac", daemon_uptime_s=round(self.t, 1))
+                st.update(ts=round(self.wall(), 3), host="jia-mac-pro", daemon_uptime_s=round(self.t, 1))
                 self._snapshot = st
             return self._snapshot
 

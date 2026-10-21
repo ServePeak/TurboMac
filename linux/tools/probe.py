@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 0 probe for old-mac: read input power, RAPL, temps, fans, GPU at a fixed
+"""Phase 0 probe for jia-mac-pro: read input power, RAPL, temps, fans, GPU at a fixed
 rate, optionally while running a bounded stress-ng load with abort guards.
 
 Stdlib only. Must run as root. Reads SMC keys through applesmc's key_at_index
